@@ -6,8 +6,9 @@ import {
   FolderSearch, Play, Pause, RefreshCw, CheckCircle2, AlertTriangle, 
   ShieldCheck, UploadCloud, Folder, Trash2, CheckSquare, Square, 
   FileText, Search, Clock, PauseCircle, AlertCircle, CheckCircle, FileCode,
-  RotateCcw
+  RotateCcw, Timer, Zap, Hourglass, FolderPlus
 } from 'lucide-react';
+import { ScanProgressGauge } from './ScanProgressGauge';
 
 interface ScanViewProps {
   onScanComplete: (scanId: string) => void;
@@ -44,9 +45,35 @@ export const ScanView: React.FC<ScanViewProps> = ({
   const [fileFilter, setFileFilter] = useState<'ALL' | 'COMPLETED' | 'PENDING' | 'ERROR'>('ALL');
   const [fileSearch, setFileSearch] = useState('');
 
+  const [nowTime, setNowTime] = useState<number>(Date.now());
+  const progressHistoryRef = useRef<{ timestamp: number; processed: number }[]>([]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const alertedFilesRef = useRef<Set<string>>(new Set());
   const alertedCompletionsRef = useRef<Set<string>>(new Set());
+
+  // 1-second countdown tick timer during active scanning
+  useEffect(() => {
+    if (!activeScan || activeScan.status !== 'SCANNING') return;
+    const interval = setInterval(() => {
+      setNowTime(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [activeScan?.status, activeScan?.scan_id]);
+
+  // Track progress history samples for accurate speed and ETA calculation
+  useEffect(() => {
+    if (!activeScan) {
+      progressHistoryRef.current = [];
+      return;
+    }
+    const now = Date.now();
+    const history = progressHistoryRef.current;
+    history.push({ timestamp: now, processed: activeScan.processed_files });
+    // Keep only samples from the last 15 seconds for rolling speed estimation
+    const cutoff = now - 15000;
+    progressHistoryRef.current = history.filter(item => item.timestamp >= cutoff);
+  }, [activeScan?.processed_files, activeScan?.scan_id]);
 
   // Load scan history to identify interrupted / paused scans
   const loadScanHistory = async () => {
@@ -309,6 +336,50 @@ export const ScanView: React.FC<ScanViewProps> = ({
     }
   };
 
+  const loadSampleFolders = () => {
+    const samples: UploadedFolder[] = [
+      {
+        id: 'sample_finance',
+        folderName: 'Finance Vault (Invoices & Cards)',
+        rootPath: './sample-files/finance',
+        fileCount: 4,
+        status: 'completed',
+        progress: 100,
+        selected: true
+      },
+      {
+        id: 'sample_keys',
+        folderName: 'Dev & Cloud Secrets',
+        rootPath: './sample-files/dev-keys',
+        fileCount: 3,
+        status: 'completed',
+        progress: 100,
+        selected: true
+      },
+      {
+        id: 'sample_security',
+        folderName: 'Security & Auth Tokens',
+        rootPath: './sample-files/security',
+        fileCount: 3,
+        status: 'completed',
+        progress: 100,
+        selected: true
+      }
+    ];
+
+    setUploadedFolders(prev => {
+      const existingPaths = new Set(prev.map(p => p.rootPath));
+      const newItems = samples.filter(s => !existingPaths.has(s.rootPath));
+      return [...prev, ...newItems];
+    });
+    setErrorMsg(null);
+    showToast({
+      title: 'SAMPLE FOLDERS LOADED',
+      message: 'Added sample workspace audit folders (Finance, Dev Keys, Security). Click "Scan Now" to begin analysis.',
+      type: 'info'
+    });
+  };
+
   const toggleFolderSelection = (id: string) => {
     setUploadedFolders(prev => prev.map(f => f.id === id ? { ...f, selected: !f.selected } : f));
   };
@@ -332,6 +403,94 @@ export const ScanView: React.FC<ScanViewProps> = ({
   const progressPercent = activeScan && activeScan.total_files > 0
     ? Math.round((activeScan.processed_files / activeScan.total_files) * 100)
     : 0;
+
+  const remainingFiles = activeScan 
+    ? Math.max(0, (activeScan.total_files || 0) - (activeScan.processed_files || 0))
+    : 0;
+
+  // Calculate real-time scan speed, countdown, and estimated time remaining
+  const { etaText, etaSeconds, scanSpeed, elapsedFormatted } = React.useMemo(() => {
+    if (!activeScan) {
+      return { etaText: '--', etaSeconds: null, scanSpeed: 0, elapsedFormatted: '00:00' };
+    }
+
+    const startTs = activeScan.start_time ? new Date(activeScan.start_time).getTime() : nowTime;
+    const endTs = activeScan.end_time ? new Date(activeScan.end_time).getTime() : nowTime;
+    const elapsedMs = Math.max(0, endTs - startTs);
+    const elapsedSec = Math.floor(elapsedMs / 1000);
+
+    const elapsedMinStr = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+    const elapsedSecStr = String(elapsedSec % 60).padStart(2, '0');
+    const elapsedFormatted = `${elapsedMinStr}:${elapsedSecStr}`;
+
+    if (activeScan.status === 'COMPLETED') {
+      return { 
+        etaText: 'Completed', 
+        etaSeconds: 0, 
+        scanSpeed: Number((activeScan.total_files / Math.max(1, elapsedSec)).toFixed(1)), 
+        elapsedFormatted 
+      };
+    }
+
+    if (activeScan.status === 'FAILED' || activeScan.status === 'CANCELLED') {
+      return { etaText: 'Stopped', etaSeconds: null, scanSpeed: 0, elapsedFormatted };
+    }
+
+    if (remainingFiles === 0 && activeScan.total_files > 0) {
+      return { 
+        etaText: 'Finalizing...', 
+        etaSeconds: 0, 
+        scanSpeed: Number((activeScan.processed_files / Math.max(1, elapsedSec)).toFixed(1)), 
+        elapsedFormatted 
+      };
+    }
+
+    // Windowed velocity calculation
+    const history = progressHistoryRef.current;
+    let speed = 0;
+    if (history.length >= 2) {
+      const oldest = history[0];
+      const newest = history[history.length - 1];
+      const timeDiff = (newest.timestamp - oldest.timestamp) / 1000;
+      const countDiff = newest.processed - oldest.processed;
+      if (timeDiff > 1 && countDiff > 0) {
+        speed = countDiff / timeDiff;
+      }
+    }
+
+    // Fallback to cumulative average speed if rolling window is settling
+    if (speed <= 0 && elapsedSec > 0 && activeScan.processed_files > 0) {
+      speed = activeScan.processed_files / elapsedSec;
+    }
+
+    if (speed <= 0 || !isFinite(speed)) {
+      return { etaText: 'Estimating...', etaSeconds: null, scanSpeed: 0, elapsedFormatted };
+    }
+
+    const estSec = Math.ceil(remainingFiles / speed);
+
+    let formattedEta = '';
+    if (estSec <= 1) {
+      formattedEta = '< 1s';
+    } else if (estSec < 60) {
+      formattedEta = `${estSec}s`;
+    } else if (estSec < 3600) {
+      const mins = Math.floor(estSec / 60);
+      const secs = estSec % 60;
+      formattedEta = `${mins}m ${secs}s`;
+    } else {
+      const hours = Math.floor(estSec / 3600);
+      const mins = Math.floor((estSec % 3600) / 60);
+      formattedEta = `${hours}h ${mins}m`;
+    }
+
+    return { 
+      etaText: formattedEta, 
+      etaSeconds: estSec, 
+      scanSpeed: Number(speed.toFixed(1)), 
+      elapsedFormatted 
+    };
+  }, [activeScan?.processed_files, activeScan?.total_files, activeScan?.status, activeScan?.start_time, activeScan?.end_time, nowTime, remainingFiles]);
 
   const anyUploading = uploadedFolders.some(f => f.status === 'uploading');
   const selectedCompletedCount = uploadedFolders.filter(f => f.selected && f.status === 'completed').length;
@@ -378,11 +537,20 @@ export const ScanView: React.FC<ScanViewProps> = ({
               Select multiple folders to include in your compliance audit batch.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <button 
+              onClick={loadSampleFolders}
+              disabled={isScanning}
+              className="bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-700/50 text-xs px-4 py-2.5 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-50"
+              title="Load built-in test directories (Finance, Dev Keys, Security)"
+            >
+              <FolderPlus className="w-4 h-4" />
+              Load Sample Demo Folders
+            </button>
             <button 
               onClick={() => fileInputRef.current?.click()}
               disabled={isScanning}
-              className="bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 text-xs px-4 py-2.5 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-50"
+              className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs px-4 py-2.5 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-50"
             >
               <UploadCloud className="w-4 h-4" />
               Upload Local Folder
@@ -407,8 +575,18 @@ export const ScanView: React.FC<ScanViewProps> = ({
               <Folder className="w-6 h-6" />
             </div>
             <div>
-              <p className="text-sm font-medium text-slate-300">No folders uploaded yet</p>
-              <p className="text-xs text-slate-500 mt-1">Click 'Upload Local Folder' above to select one or more folders for analysis.</p>
+              <p className="text-sm font-medium text-slate-300">No folders selected yet</p>
+              <p className="text-xs text-slate-500 mt-1">Upload a local folder or click 'Load Sample Demo Folders' to test immediately.</p>
+            </div>
+            <div className="pt-2 flex justify-center">
+              <button
+                onClick={loadSampleFolders}
+                disabled={isScanning}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm"
+              >
+                <FolderPlus className="w-4 h-4" />
+                Load Sample Audit Folders
+              </button>
             </div>
           </div>
         ) : (
@@ -639,50 +817,159 @@ export const ScanView: React.FC<ScanViewProps> = ({
             </div>
           </div>
 
-          {/* Progress bar */}
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <div className="flex justify-between text-xs font-mono">
-                <span className="text-slate-400">
-                  Processed {activeScan.processed_files} of {activeScan.total_files} files
+          {/* D3 Progress Ring & Real-Time Status Layout */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center bg-slate-950/40 p-4 rounded-xl border border-slate-800/80">
+            {/* D3 Gauge Visualizer */}
+            <div className="lg:col-span-4 flex flex-col items-center justify-center border-b lg:border-b-0 lg:border-r border-slate-800/80 pb-4 lg:pb-0 lg:pr-4">
+              <ScanProgressGauge
+                progress={progressPercent}
+                processedFiles={activeScan.processed_files}
+                totalFiles={activeScan.total_files}
+                status={activeScan.status}
+                size={190}
+              />
+              <div className="flex items-center gap-2 mt-1">
+                <span className={`inline-block w-2 h-2 rounded-full ${
+                  activeScan.status === 'SCANNING' ? 'bg-emerald-400 animate-pulse' :
+                  activeScan.status === 'PAUSED' ? 'bg-amber-400' :
+                  activeScan.status === 'FAILED' ? 'bg-rose-400' : 'bg-emerald-400'
+                }`} />
+                <span className="text-[11px] font-mono text-slate-400 font-medium">
+                  {activeScan.status === 'SCANNING' ? 'Real-time D3 Radial Engine' :
+                   activeScan.status === 'PAUSED' ? 'Scan Paused' :
+                   activeScan.status === 'FAILED' ? 'Scan Terminated' : 'Scan Complete'}
                 </span>
-                <span className="text-emerald-400 font-bold">{progressPercent}%</span>
-              </div>
-              <div className="w-full h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-800 p-0.5">
-                <div
-                  className={`h-full rounded-full transition-all duration-300 ${
-                    activeScan.status === 'PAUSED' ? 'bg-amber-500' : 'bg-gradient-to-r from-emerald-600 to-emerald-400'
-                  }`}
-                  style={{ width: `${progressPercent}%` }}
-                ></div>
               </div>
             </div>
 
-            {activeScan.status === 'SCANNING' && (
-              <div className="flex flex-col gap-1.5 text-xs font-mono bg-slate-950/50 p-4 rounded-lg border border-slate-800/50">
-                <div className={activeScan.current_file === 'Discovering files...' ? 'text-emerald-400 font-semibold' : 'text-slate-500'}>
-                  {activeScan.current_file === 'Discovering files...' ? 'Step 1/5 — Discovering files...' : '✓ Step 1/5 — Discovering files'}
+            {/* Linear Progress Bar & Pipeline Steps */}
+            <div className="lg:col-span-8 space-y-4">
+              <div className="space-y-2">
+                <div className="flex justify-between text-xs font-mono">
+                  <span className="text-slate-400">
+                    Processed <strong className="text-slate-200">{activeScan.processed_files}</strong> of <strong className="text-slate-200">{activeScan.total_files}</strong> files
+                  </span>
+                  <span className="text-emerald-400 font-bold">{progressPercent}%</span>
                 </div>
-                <div className={activeScan.current_file !== 'Discovering files...' && activeScan.current_file !== 'Evaluating compliance...' && activeScan.current_file !== 'Finalizing results...' ? 'text-emerald-400 font-semibold' : activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? 'text-slate-500' : 'text-slate-600 opacity-50'}>
-                  {activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? '✓ Step 2/5 — Extracting evidence' : 'Step 2/5 — Extracting evidence'}
-                </div>
-                <div className={activeScan.current_file !== 'Discovering files...' && activeScan.current_file !== 'Evaluating compliance...' && activeScan.current_file !== 'Finalizing results...' ? 'text-emerald-400 font-semibold' : activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? 'text-slate-500' : 'text-slate-600 opacity-50'}>
-                  {activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? '✓ Step 3/5 — Security analysis' : 'Step 3/5 — Security analysis'}
-                </div>
-                <div className={activeScan.current_file === 'Evaluating compliance...' ? 'text-emerald-400 font-semibold' : activeScan.current_file === 'Finalizing results...' ? 'text-slate-500' : 'text-slate-600 opacity-50'}>
-                  {activeScan.current_file === 'Finalizing results...' ? '✓ Step 4/5 — Audit compliance' : 'Step 4/5 — Audit compliance'}
-                </div>
-                <div className={activeScan.current_file === 'Finalizing results...' ? 'text-emerald-400 font-semibold' : 'text-slate-600 opacity-50'}>
-                  Step 5/5 — Finalizing results
+                <div className="w-full h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-800 p-0.5">
+                  <div
+                    className={`h-full rounded-full transition-all duration-300 ${
+                      activeScan.status === 'PAUSED' ? 'bg-amber-500' : 'bg-gradient-to-r from-emerald-600 to-emerald-400'
+                    }`}
+                    style={{ width: `${progressPercent}%` }}
+                  ></div>
                 </div>
               </div>
-            )}
 
-            {activeScan.current_file && activeScan.current_file !== 'Discovering files...' && activeScan.current_file !== 'Evaluating compliance...' && activeScan.current_file !== 'Finalizing results...' && (
-              <div className="text-xs text-slate-400 font-mono truncate">
-                Processing file: <span className="text-slate-200">{activeScan.current_file}</span>
+              {activeScan.status === 'SCANNING' && (
+                <div className="flex flex-col gap-1.5 text-xs font-mono bg-slate-950/70 p-3.5 rounded-lg border border-slate-800/60">
+                  <div className={activeScan.current_file === 'Discovering files...' ? 'text-emerald-400 font-semibold' : 'text-slate-500'}>
+                    {activeScan.current_file === 'Discovering files...' ? 'Step 1/5 — Discovering files...' : '✓ Step 1/5 — Discovering files'}
+                  </div>
+                  <div className={activeScan.current_file !== 'Discovering files...' && activeScan.current_file !== 'Evaluating compliance...' && activeScan.current_file !== 'Finalizing results...' ? 'text-emerald-400 font-semibold' : activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? 'text-slate-500' : 'text-slate-600 opacity-50'}>
+                    {activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? '✓ Step 2/5 — Extracting evidence' : 'Step 2/5 — Extracting evidence'}
+                  </div>
+                  <div className={activeScan.current_file !== 'Discovering files...' && activeScan.current_file !== 'Evaluating compliance...' && activeScan.current_file !== 'Finalizing results...' ? 'text-emerald-400 font-semibold' : activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? 'text-slate-500' : 'text-slate-600 opacity-50'}>
+                    {activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? '✓ Step 3/5 — Security analysis' : 'Step 3/5 — Security analysis'}
+                  </div>
+                  <div className={activeScan.current_file === 'Evaluating compliance...' ? 'text-emerald-400 font-semibold' : activeScan.current_file === 'Finalizing results...' ? 'text-slate-500' : 'text-slate-600 opacity-50'}>
+                    {activeScan.current_file === 'Finalizing results...' ? '✓ Step 4/5 — Audit compliance' : 'Step 4/5 — Audit compliance'}
+                  </div>
+                  <div className={activeScan.current_file === 'Finalizing results...' ? 'text-emerald-400 font-semibold' : 'text-slate-600 opacity-50'}>
+                    Step 5/5 — Finalizing results
+                  </div>
+                </div>
+              )}
+
+              {activeScan.current_file && activeScan.current_file !== 'Discovering files...' && activeScan.current_file !== 'Evaluating compliance...' && activeScan.current_file !== 'Finalizing results...' && (
+                <div className="text-xs text-slate-400 font-mono truncate">
+                  Processing file: <span className="text-slate-200">{activeScan.current_file}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Real-Time Scan Telemetry & Countdown Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {/* Countdown / Estimated Time Remaining */}
+            <div className="bg-slate-950/80 border border-emerald-500/30 rounded-xl p-4 flex items-center justify-between shadow-sm relative overflow-hidden">
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold uppercase tracking-wider">
+                  <Hourglass className={`w-3.5 h-3.5 ${activeScan.status === 'SCANNING' ? 'animate-spin' : ''}`} />
+                  <span>Time Remaining</span>
+                </div>
+                <div className="text-xl font-bold font-mono text-slate-100 truncate">
+                  {etaText}
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  {activeScan.status === 'SCANNING' 
+                    ? `${remainingFiles} file(s) in queue`
+                    : activeScan.status === 'COMPLETED' 
+                    ? 'Scan completed'
+                    : 'Process paused'}
+                </p>
               </div>
-            )}
+              <div className="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 flex-shrink-0">
+                <Timer className="w-5 h-5" />
+              </div>
+            </div>
+
+            {/* Scan Speed Velocity */}
+            <div className="bg-slate-950/80 border border-amber-500/20 rounded-xl p-4 flex items-center justify-between shadow-sm">
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-1.5 text-xs text-amber-400 font-semibold uppercase tracking-wider">
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>Scan Speed</span>
+                </div>
+                <div className="text-xl font-bold font-mono text-slate-100">
+                  {scanSpeed} <span className="text-xs font-normal text-slate-400">files/s</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Rolling 15s throughput
+                </p>
+              </div>
+              <div className="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 flex-shrink-0">
+                <Zap className="w-5 h-5" />
+              </div>
+            </div>
+
+            {/* Elapsed Time */}
+            <div className="bg-slate-950/80 border border-blue-500/20 rounded-xl p-4 flex items-center justify-between shadow-sm">
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-1.5 text-xs text-blue-400 font-semibold uppercase tracking-wider">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Elapsed Time</span>
+                </div>
+                <div className="text-xl font-bold font-mono text-slate-100">
+                  {elapsedFormatted}
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono truncate">
+                  {activeScan.start_time ? `Started ${new Date(activeScan.start_time).toLocaleTimeString()}` : 'Session running'}
+                </p>
+              </div>
+              <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 flex-shrink-0">
+                <Clock className="w-5 h-5" />
+              </div>
+            </div>
+
+            {/* Queue & Processed Ratio */}
+            <div className="bg-slate-950/80 border border-purple-500/20 rounded-xl p-4 flex items-center justify-between shadow-sm">
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-1.5 text-xs text-purple-400 font-semibold uppercase tracking-wider">
+                  <FileCode className="w-3.5 h-3.5" />
+                  <span>Queue Status</span>
+                </div>
+                <div className="text-xl font-bold font-mono text-slate-100">
+                  {activeScan.processed_files} <span className="text-xs font-normal text-slate-400">/ {activeScan.total_files}</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  {progressPercent}% total processed
+                </p>
+              </div>
+              <div className="w-10 h-10 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 flex-shrink-0">
+                <FolderSearch className="w-5 h-5" />
+              </div>
+            </div>
           </div>
 
           {/* Live telemetry counters */}
