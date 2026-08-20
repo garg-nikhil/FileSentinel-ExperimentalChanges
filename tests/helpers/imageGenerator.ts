@@ -24,6 +24,31 @@ export function createSyntheticPngImage(dir: string, options: ImageFixtureOption
     return filePath;
   }
 
+  // Handle oversized resolution testing safely without huge RAM allocations
+  if (width > 4000 || height > 4000) {
+    const ihdrData = Buffer.alloc(13);
+    ihdrData.writeUInt32BE(width, 0);
+    ihdrData.writeUInt32BE(height, 4);
+    ihdrData.writeUInt8(8, 8); // 8 bit
+    ihdrData.writeUInt8(2, 9); // RGB
+    ihdrData.writeUInt8(0, 10); // compression
+    ihdrData.writeUInt8(0, 11); // filter
+    ihdrData.writeUInt8(0, 12); // interlace
+
+    const ihdrTypeAndData = Buffer.concat([Buffer.from('IHDR'), ihdrData]);
+    const crc = zlib.crc32 ? zlib.crc32(ihdrTypeAndData) : 0;
+    const crcBuf = Buffer.alloc(4);
+    crcBuf.writeUInt32BE(crc >>> 0, 0);
+
+    const ihdrLen = Buffer.alloc(4);
+    ihdrLen.writeUInt32BE(13, 0);
+
+    const pngSignature = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    const headerBuffer = Buffer.concat([pngSignature, ihdrLen, ihdrTypeAndData, crcBuf]);
+    fs.writeFileSync(filePath, headerBuffer);
+    return filePath;
+  }
+
   // Render text onto canvas if payload is provided
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');

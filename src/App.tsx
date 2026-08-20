@@ -110,9 +110,10 @@ function MainLayout() {
   };
 
   useEffect(() => {
-    // 1. Initial server-side clock block check
+    // 1. Initial authentication bootstrap & server-side clock block check
     const checkServerLicense = async () => {
       try {
+        await api.ensureAuthenticated();
         const status = await api.getOfflineLicenseStatus();
         if (status && (status.status === 'CLOCK_ROLLBACK_DETECTED' || status.clockRollbackDetected)) {
           setIsScanLocked(true);

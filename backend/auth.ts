@@ -165,11 +165,10 @@ export function authenticateRequest(req: Request, res: Response, next: NextFunct
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
   const deviceIdHeader = req.headers['x-device-id'] as string | undefined;
 
-  const isDevMode = process.env.NODE_ENV !== 'production' && process.env.FILE_SENTINEL_DEV_MODE !== 'false';
+  const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
   const activeDb = (req.app?.locals?.db) || getDatabase();
 
   const ipcSecret = process.env.FILE_SENTINEL_IPC_SECRET;
-  const clientIpcSecret = req.headers['x-fs-ipc-secret'];
   const clientIpcToken = req.headers['x-fs-ipc-token'] as string | undefined;
 
   // 1. Strict loopback-only check & non-trust of forwarded headers
@@ -197,13 +196,6 @@ export function authenticateRequest(req: Request, res: Response, next: NextFunct
       verifiedIpcPayload = verifyIpcJwt(clientIpcToken, ipcSecret);
     } else if (token && token.includes('.') && token.split('.').length === 3) {
       verifiedIpcPayload = verifyIpcJwt(token, ipcSecret);
-    } else if (clientIpcSecret === ipcSecret) {
-      // Fallback fallback for existing test suites
-      verifiedIpcPayload = {
-        deviceId: deviceIdHeader || 'ipc-device-local',
-        orgId: 'org-default-dev',
-        role: 'SYS_ADMIN'
-      };
     }
   }
 

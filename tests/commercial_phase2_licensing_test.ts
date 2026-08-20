@@ -1,3 +1,4 @@
+process.env.FILE_SENTINEL_DEV_MODE = 'true';
 import { getDatabase } from '../backend/db.js';
 import { LicensingEngine } from '../backend/licensing.js';
 import assert from 'node:assert';

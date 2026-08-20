@@ -22,15 +22,17 @@ export const securityHeaders = helmet({
 // --- CORS MIDDLEWARE ---
 export function corsMiddleware(req: Request, res: Response, next: NextFunction) {
   const origin = req.headers.origin;
-  const allowedOrigins = [
+  const envAllowed = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean) : [];
+  const allowedOrigins = new Set([
     'http://localhost:3000',
-    'http://127.0.0.1:3000'
-  ];
+    'http://127.0.0.1:3000',
+    'tauri://localhost',
+    'http://tauri.localhost',
+    ...envAllowed
+  ]);
 
-  if (origin) {
-    if (allowedOrigins.includes(origin) || origin.includes('.run.app') || origin.includes('ai.studio') || process.env.NODE_ENV !== 'production') {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-    }
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-FS-IPC-Secret, X-CSRF-Token, X-Requested-With');

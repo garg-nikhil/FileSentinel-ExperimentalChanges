@@ -1,3 +1,4 @@
+process.env.FILE_SENTINEL_DEV_MODE = 'true';
 import express from 'express';
 import http from 'node:http';
 import fs from 'node:fs';

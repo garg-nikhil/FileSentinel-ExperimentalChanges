@@ -1,3 +1,4 @@
+process.env.FILE_SENTINEL_DEV_MODE = 'true';
 import { getDatabase } from '../backend/db.js';
 import { hashPassword, verifyPassword } from '../backend/auth.js';
 import crypto from 'node:crypto';

@@ -2,8 +2,27 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 
 export class SecretManager {
-  private static jwtSecretKey: string = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
-  private static webhookSecretKey: string = process.env.RAZORPAY_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
+  private static jwtSecretKey: string = (() => {
+    const val = process.env.JWT_SECRET;
+    if (!val) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('FATAL: JWT_SECRET environment variable is required in production. Fail-closed enforced.');
+      }
+      return 'test-jwt-secret-key-fallback';
+    }
+    return val;
+  })();
+
+  private static webhookSecretKey: string = (() => {
+    const val = process.env.RAZORPAY_WEBHOOK_SECRET;
+    if (!val) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('FATAL: RAZORPAY_WEBHOOK_SECRET environment variable is required in production. Fail-closed enforced.');
+      }
+      return 'test-webhook-secret-key-fallback';
+    }
+    return val;
+  })();
   private static lastRotationAt: string = new Date().toISOString();
   private static rotationIntervalDays: number = 30;
 

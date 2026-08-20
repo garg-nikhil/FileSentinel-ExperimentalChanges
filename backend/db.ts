@@ -700,19 +700,22 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       console.warn('[DB Migration] migration check:', migErr);
     }
 
-    // Seed default system administrator if none exists
-    const sysAdminCheck = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'SYS_ADMIN'").get() as { count: number };
-    if (sysAdminCheck.count === 0) {
-      const sysOrgId = 'org-sysadmin-internal';
-      const now = new Date().toISOString();
-      db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, suspended, created_at) VALUES (?, ?, 0, ?)').run(sysOrgId, 'FileSentinel Internal Administration', now);
+    // Seed default system administrator if none exists (dev mode only)
+    const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
+    if (isDevMode) {
+      const sysAdminCheck = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'SYS_ADMIN'").get() as { count: number };
+      if (sysAdminCheck.count === 0) {
+        const sysOrgId = 'org-sysadmin-internal';
+        const now = new Date().toISOString();
+        db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, suspended, created_at) VALUES (?, ?, 0, ?)').run(sysOrgId, 'FileSentinel Internal Administration', now);
 
-      const sysUserId = 'user-sysadmin-01';
-      const saltBuf = crypto.randomBytes(16);
-      const passBuf = Buffer.from('SysAdmin123!', 'utf8');
-      const hashBuf = crypto.scryptSync(passBuf, saltBuf, 64);
-      const sysHash = `${saltBuf.toString('hex')}:${hashBuf.toString('hex')}`;
-      db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(sysUserId, sysOrgId, 'sysadmin', sysHash, 'SYS_ADMIN', now);
+        const sysUserId = 'user-sysadmin-01';
+        const saltBuf = crypto.randomBytes(16);
+        const passBuf = Buffer.from('SysAdmin123!', 'utf8');
+        const hashBuf = crypto.scryptSync(passBuf, saltBuf, 64);
+        const sysHash = `${saltBuf.toString('hex')}:${hashBuf.toString('hex')}`;
+        db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(sysUserId, sysOrgId, 'sysadmin', sysHash, 'SYS_ADMIN', now);
+      }
     }
 
     // Seed default plans
@@ -753,7 +756,7 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
     }
 
     // Seed default organization, user, device, and license if devadmin does not exist (dev mode only)
-    if (process.env.NODE_ENV !== 'production') {
+    if (process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production') {
       const devAdminCheck = db.prepare("SELECT COUNT(*) as count FROM users WHERE username = 'devadmin'").get() as { count: number };
       if (devAdminCheck.count === 0) {
         const defaultOrgId = 'org-default-dev';

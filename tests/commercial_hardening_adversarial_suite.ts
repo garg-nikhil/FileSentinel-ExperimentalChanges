@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { getDatabase } from '../backend/db.js';
 import { ImageOcrExtractor } from '../backend/extractors/imageOcrExtractor.js';
 import { createSyntheticPngImage } from './helpers/imageGenerator.js';
 import { OfflineLicenseEngine, getOrCreateDevKeyPair } from '../backend/licensing/offlineLicense.js';
@@ -33,17 +34,12 @@ async function runCommercialHardeningSuite() {
 
   const dbPath = path.join(process.cwd(), 'test_hardening_gate.db');
   if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
-  const db = new DatabaseSync(dbPath);
+  const db = getDatabase(dbPath);
 
-  // Initialize DB tables
+  // Initialize sample organizations
   db.exec(`
-    CREATE TABLE IF NOT EXISTS organizations (
-      org_id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      suspended INTEGER DEFAULT 0
-    );
-    INSERT INTO organizations (org_id, name) VALUES ('org-bank-001', 'First National Bank');
-    INSERT INTO organizations (org_id, name) VALUES ('org-bank-002', 'Competitor Bank');
+    INSERT OR IGNORE INTO organizations (org_id, name, created_at) VALUES ('org-bank-001', 'First National Bank', '2026-01-01T00:00:00.000Z');
+    INSERT OR IGNORE INTO organizations (org_id, name, created_at) VALUES ('org-bank-002', 'Competitor Bank', '2026-01-01T00:00:00.000Z');
   `);
 
   const tempDir = path.join(process.cwd(), 'test_hardening_workspace');

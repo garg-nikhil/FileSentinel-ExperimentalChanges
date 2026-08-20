@@ -2805,10 +2805,10 @@ export function createApiRouter(customDb?: any) {
 
       // Check license validity before starting new scan
       const licEngine = new OfflineLicenseEngine(db);
-      const isProduction = process.env.NODE_ENV === 'production';
+      const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
       let licValidation;
 
-      if (isProduction) {
+      if (!isDevMode) {
         licValidation = licEngine.validateCurrentLicense({ orgId, deviceId: req.user!.deviceId });
       } else {
         const devKey = getOrCreateDevKeyPair();
@@ -2928,10 +2928,10 @@ export function createApiRouter(customDb?: any) {
     try {
       const orgId = req.user!.orgId;
       const licEngine = new OfflineLicenseEngine(db);
-      const isProduction = process.env.NODE_ENV === 'production';
+      const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
       let validation;
 
-      if (isProduction) {
+      if (!isDevMode) {
         validation = licEngine.validateCurrentLicense({ orgId, deviceId: req.user!.deviceId });
       } else {
         const devKey = getOrCreateDevKeyPair();
@@ -3014,10 +3014,10 @@ export function createApiRouter(customDb?: any) {
         }
 
         // 4. Validate license
-        const isProduction = process.env.NODE_ENV === 'production';
+        const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
         let validation;
 
-        if (isProduction) {
+        if (!isDevMode) {
           validation = licEngine.validateCurrentLicense({ orgId, deviceId });
         } else {
           const devKey = getOrCreateDevKeyPair();

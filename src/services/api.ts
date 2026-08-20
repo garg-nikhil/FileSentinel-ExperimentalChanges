@@ -8,19 +8,152 @@ import {
   ScanSession
 } from '../types.js';
 
+let memoryToken: string | null = typeof window !== 'undefined' ? localStorage.getItem('filesentinel_token') : null;
+
+export function getAuthToken(): string | null {
+  if (memoryToken) return memoryToken;
+  if (typeof window !== 'undefined') {
+    return localStorage.getItem('filesentinel_token');
+  }
+  return null;
+}
+
+export function setAuthToken(token: string | null) {
+  memoryToken = token;
+  if (typeof window !== 'undefined') {
+    if (token) {
+      localStorage.setItem('filesentinel_token', token);
+    } else {
+      localStorage.removeItem('filesentinel_token');
+    }
+  }
+}
+
+export async function ensureAuthenticated(): Promise<string> {
+  const existingToken = getAuthToken();
+  if (existingToken) {
+    try {
+      const res = await fetch('/api/auth/me', {
+        headers: { 'Authorization': `Bearer ${existingToken}` }
+      });
+      if (res.ok) {
+        return existingToken;
+      }
+    } catch {
+      // Ignore network errors
+    }
+  }
+
+  // Attempt login using dev credentials if dev mode is active on backend
+  try {
+    const loginRes = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: 'devadmin',
+        password: 'devpassword',
+        device_id: 'dev-device-default'
+      })
+    });
+    if (loginRes.ok) {
+      const data = await loginRes.json();
+      if (data.token) {
+        setAuthToken(data.token);
+        return data.token;
+      }
+    }
+  } catch (err) {
+    console.error('[AuthBootstrap] Failed to establish session:', err);
+  }
+
+  return '';
+}
+
+async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  let token = getAuthToken();
+  if (!token) {
+    token = await ensureAuthenticated();
+  }
+
+  const headers = new Headers(options.headers || {});
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  let res = await fetch(url, { ...options, headers });
+
+  if (res.status === 401) {
+    // Attempt token rotation or re-authentication
+    if (token) {
+      try {
+        const rotateRes = await fetch('/api/auth/rotate-token', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (rotateRes.ok) {
+          const rotateData = await rotateRes.json();
+          if (rotateData.token) {
+            setAuthToken(rotateData.token);
+            token = rotateData.token;
+            headers.set('Authorization', `Bearer ${token}`);
+            return await fetch(url, { ...options, headers });
+          }
+        }
+      } catch {}
+    }
+
+    const newToken = await ensureAuthenticated();
+    if (newToken && newToken !== token) {
+      headers.set('Authorization', `Bearer ${newToken}`);
+      return await fetch(url, { ...options, headers });
+    }
+  }
+
+  return res;
+}
+
 export const api = {
+  getAuthToken,
+  setAuthToken,
+  ensureAuthenticated,
+
+  async login(username: string, password: string, device_id?: string) {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, device_id })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Login failed' }));
+      throw new Error(err.error || 'Login failed');
+    }
+    const data = await res.json();
+    if (data.token) {
+      setAuthToken(data.token);
+    }
+    return data;
+  },
+
+  async logout() {
+    try {
+      await authFetch('/api/auth/logout', { method: 'POST' });
+    } finally {
+      setAuthToken(null);
+    }
+  },
+
   async getHealth() {
-    const res = await fetch('/api/health');
+    const res = await authFetch('/api/health');
     return res.json();
   },
 
   async getSettings(): Promise<AppSettings> {
-    const res = await fetch('/api/settings');
+    const res = await authFetch('/api/settings');
     return res.json();
   },
 
   async updateSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
-    const res = await fetch('/api/settings', {
+    const res = await authFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings)
@@ -29,7 +162,7 @@ export const api = {
   },
 
   async triggerScheduledScanNow(): Promise<{ success: boolean; result: any }> {
-    const res = await fetch('/api/settings/scheduler/trigger-now', {
+    const res = await authFetch('/api/settings/scheduler/trigger-now', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -41,19 +174,19 @@ export const api = {
   },
 
   async getScheduledScanHistory(): Promise<any[]> {
-    const res = await fetch('/api/settings/scheduler/history');
+    const res = await authFetch('/api/settings/scheduler/history');
     if (!res.ok) return [];
     const data = await res.json();
     return data.history || [];
   },
 
   async getDashboardStats(): Promise<DashboardStats> {
-    const res = await fetch('/api/dashboard/stats');
+    const res = await authFetch('/api/dashboard/stats');
     return res.json();
   },
 
   async startScan(rootPaths: string | string[]): Promise<ScanSession> {
-    const res = await fetch('/api/scans', {
+    const res = await authFetch('/api/scans', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ root_paths: Array.isArray(rootPaths) ? rootPaths : [rootPaths] })
@@ -79,6 +212,10 @@ export const api = {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/scans/upload-target');
+      const token = getAuthToken();
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
       
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) {
@@ -112,12 +249,12 @@ export const api = {
   },
 
   async getScanProgress(scanId: string): Promise<ScanSession> {
-    const res = await fetch(`/api/scans/${scanId}/progress`);
+    const res = await authFetch(`/api/scans/${scanId}/progress`);
     return res.json();
   },
 
   async pauseScan(scanId: string): Promise<{ success: boolean; scan: ScanSession }> {
-    const res = await fetch(`/api/scans/${scanId}/pause`, {
+    const res = await authFetch(`/api/scans/${scanId}/pause`, {
       method: 'POST'
     });
     if (!res.ok) {
@@ -128,7 +265,7 @@ export const api = {
   },
 
   async resumeScan(scanId: string): Promise<ScanSession> {
-    const res = await fetch(`/api/scans/${scanId}/resume`, {
+    const res = await authFetch(`/api/scans/${scanId}/resume`, {
       method: 'POST'
     });
     if (!res.ok) {
@@ -139,7 +276,7 @@ export const api = {
   },
 
   async getScanFiles(scanId: string): Promise<FileItem[]> {
-    const res = await fetch(`/api/scans/${scanId}/files`);
+    const res = await authFetch(`/api/scans/${scanId}/files`);
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error || 'Failed to fetch scan files');
@@ -148,40 +285,40 @@ export const api = {
   },
 
   async getScanHistory(): Promise<ScanSession[]> {
-    const res = await fetch('/api/scans');
+    const res = await authFetch('/api/scans');
     return res.json();
   },
 
   async getFiles(params?: { scan_id?: string; classification?: string }): Promise<FileItem[]> {
     const query = new URLSearchParams(params as any).toString();
-    const res = await fetch(`/api/files${query ? `?${query}` : ''}`);
+    const res = await authFetch(`/api/files${query ? `?${query}` : ''}`);
     return res.json();
   },
 
   async getFileDetail(fileId: string): Promise<FileItem> {
-    const res = await fetch(`/api/files/${fileId}`);
+    const res = await authFetch(`/api/files/${fileId}`);
     return res.json();
   },
 
   async analyzeFileWithAI(fileId: string) {
-    const res = await fetch(`/api/files/${fileId}/analyze-ai`, {
+    const res = await authFetch(`/api/files/${fileId}/analyze-ai`, {
       method: 'POST'
     });
     return res.json();
   },
 
   async getFindings(): Promise<Finding[]> {
-    const res = await fetch('/api/findings');
+    const res = await authFetch('/api/findings');
     return res.json();
   },
 
   async getRules(): Promise<Rule[]> {
-    const res = await fetch('/api/rules');
+    const res = await authFetch('/api/rules');
     return res.json();
   },
 
   async toggleRule(id: string, enabled: boolean) {
-    const res = await fetch(`/api/rules/${id}/toggle`, {
+    const res = await authFetch(`/api/rules/${id}/toggle`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled })
@@ -190,7 +327,7 @@ export const api = {
   },
 
   async createRule(rule: Partial<Rule>) {
-    const res = await fetch('/api/rules', {
+    const res = await authFetch('/api/rules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(rule)
@@ -199,21 +336,19 @@ export const api = {
   },
 
   async getQuarantineItems(): Promise<QuarantineItem[]> {
-    const res = await fetch('/api/quarantine');
+    const res = await authFetch('/api/quarantine');
     return res.json();
   },
 
   async quarantineFile(fileId: string) {
-    const res = await fetch(`/api/quarantine/${fileId}`, {
+    const res = await authFetch(`/api/quarantine/${fileId}`, {
       method: 'POST'
     });
     return res.json();
   },
 
-
-
   async getAuditLogs() {
-    const res = await fetch('/api/audit-logs');
+    const res = await authFetch('/api/audit-logs');
     return res.json();
   },
 
@@ -226,7 +361,7 @@ export const api = {
     agency_name?: string;
     auditor_name?: string;
   }) {
-    const res = await fetch('/api/audit/run', {
+    const res = await authFetch('/api/audit/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params || {})
@@ -235,12 +370,12 @@ export const api = {
   },
 
   async getAuditSessions() {
-    const res = await fetch('/api/audit/sessions');
+    const res = await authFetch('/api/audit/sessions');
     return res.json();
   },
 
   async getAuditSessionDetail(auditId: string) {
-    const res = await fetch(`/api/audit/session/${auditId}`);
+    const res = await authFetch(`/api/audit/session/${auditId}`);
     return res.json();
   },
 
@@ -251,7 +386,7 @@ export const api = {
     auditor_name: string;
     comment?: string;
   }) {
-    const res = await fetch('/api/audit/override', {
+    const res = await authFetch('/api/audit/override', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params)
@@ -260,22 +395,22 @@ export const api = {
   },
 
   async getAuditChecklist() {
-    const res = await fetch('/api/audit/checklist');
+    const res = await authFetch('/api/audit/checklist');
     return res.json();
   },
 
   async getEvidenceGaps(auditId: string) {
-    const res = await fetch(`/api/audit/gaps/${auditId}`);
+    const res = await authFetch(`/api/audit/gaps/${auditId}`);
     return res.json();
   },
 
   async getCloudUploads() {
-    const res = await fetch('/api/cloud-uploads');
+    const res = await authFetch('/api/cloud-uploads');
     return res.json();
   },
 
   async uploadSelectedFiles(fileIds: string[]) {
-    const res = await fetch('/api/cloud-uploads/upload', {
+    const res = await authFetch('/api/cloud-uploads/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_ids: fileIds })
@@ -284,7 +419,7 @@ export const api = {
   },
 
   async uploadAllFiles(scanId?: string) {
-    const res = await fetch('/api/cloud-uploads/upload-all', {
+    const res = await authFetch('/api/cloud-uploads/upload-all', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scan_id: scanId })
@@ -293,14 +428,14 @@ export const api = {
   },
 
   async retryCloudUpload(fileId: string) {
-    const res = await fetch(`/api/cloud-uploads/retry/${fileId}`, {
+    const res = await authFetch(`/api/cloud-uploads/retry/${fileId}`, {
       method: 'POST'
     });
     return res.json();
   },
 
   async getLicense() {
-    const res = await fetch('/api/license');
+    const res = await authFetch('/api/license');
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Failed to fetch license');
@@ -309,12 +444,12 @@ export const api = {
   },
 
   async getLicenseDevices() {
-    const res = await fetch('/api/license/devices');
+    const res = await authFetch('/api/license/devices');
     return res.json();
   },
 
   async activateLicenseDevice(deviceId?: string) {
-    const res = await fetch('/api/license/devices/activate', {
+    const res = await authFetch('/api/license/devices/activate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ device_id: deviceId })
@@ -323,7 +458,7 @@ export const api = {
   },
 
   async deactivateLicenseDevice(deviceId: string) {
-    const res = await fetch('/api/license/devices/deactivate', {
+    const res = await authFetch('/api/license/devices/deactivate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ device_id: deviceId })
@@ -332,23 +467,23 @@ export const api = {
   },
 
   async getLicenseEvents() {
-    const res = await fetch('/api/license/events');
+    const res = await authFetch('/api/license/events');
     return res.json();
   },
 
   // --- PRIVACY-PRESERVING TELEMETRY SERVICES ---
   async getScanTelemetryHistory(limit: number = 50, offset: number = 0) {
-    const res = await fetch(`/api/scans/history?limit=${limit}&offset=${offset}`);
+    const res = await authFetch(`/api/scans/history?limit=${limit}&offset=${offset}`);
     return res.json();
   },
 
   async getScanTelemetryDetail(scanId: string) {
-    const res = await fetch(`/api/scans/${scanId}`);
+    const res = await authFetch(`/api/scans/${scanId}`);
     return res.json();
   },
 
   async postScanTelemetry(payload: any) {
-    const res = await fetch('/api/telemetry/scans', {
+    const res = await authFetch('/api/telemetry/scans', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -357,12 +492,12 @@ export const api = {
   },
 
   async getTelemetryQueueStatus() {
-    const res = await fetch('/api/telemetry/queue/status');
+    const res = await authFetch('/api/telemetry/queue/status');
     return res.json();
   },
 
   async flushTelemetryQueue() {
-    const res = await fetch('/api/telemetry/queue/flush', {
+    const res = await authFetch('/api/telemetry/queue/flush', {
       method: 'POST'
     });
     return res.json();
@@ -370,17 +505,17 @@ export const api = {
 
   // --- VENDOR CLOUD DASHBOARD API ---
   async getCloudDashboardOverview() {
-    const res = await fetch('/api/cloud-dashboard/overview');
+    const res = await authFetch('/api/cloud-dashboard/overview');
     return res.json();
   },
 
   async getCloudComplianceTrend(limit: number = 30) {
-    const res = await fetch(`/api/cloud-dashboard/trend?limit=${limit}`);
+    const res = await authFetch(`/api/cloud-dashboard/trend?limit=${limit}`);
     return res.json();
   },
 
   async verifyCloudReport(queryId: string) {
-    const res = await fetch('/api/cloud-dashboard/verify-report', {
+    const res = await authFetch('/api/cloud-dashboard/verify-report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query_id: queryId })
@@ -389,22 +524,22 @@ export const api = {
   },
 
   async getCloudOrganizationInfo() {
-    const res = await fetch('/api/cloud-dashboard/organization');
+    const res = await authFetch('/api/cloud-dashboard/organization');
     return res.json();
   },
 
   async getCloudSoftwareVersion() {
-    const res = await fetch('/api/cloud-dashboard/software-version');
+    const res = await authFetch('/api/cloud-dashboard/software-version');
     return res.json();
   },
 
   async getCloudUsers() {
-    const res = await fetch('/api/users');
+    const res = await authFetch('/api/users');
     return res.json();
   },
 
   async createCloudUser(payload: { username: string; password: string; role: string }) {
-    const res = await fetch('/api/users/create', {
+    const res = await authFetch('/api/users/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -413,14 +548,14 @@ export const api = {
   },
 
   async toggleCloudUserDisable(userId: string) {
-    const res = await fetch(`/api/users/${userId}/toggle-disable`, {
+    const res = await authFetch(`/api/users/${userId}/toggle-disable`, {
       method: 'POST'
     });
     return res.json();
   },
 
   async updateCloudUserRole(userId: string, role: string) {
-    const res = await fetch(`/api/users/${userId}/role`, {
+    const res = await authFetch(`/api/users/${userId}/role`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ role })
@@ -429,19 +564,19 @@ export const api = {
   },
 
   async removeCloudUser(userId: string) {
-    const res = await fetch(`/api/users/${userId}`, {
+    const res = await authFetch(`/api/users/${userId}`, {
       method: 'DELETE'
     });
     return res.json();
   },
 
   async getCloudDevices() {
-    const res = await fetch('/api/devices');
+    const res = await authFetch('/api/devices');
     return res.json();
   },
 
   async revokeCloudDevice(deviceId: string) {
-    const res = await fetch(`/api/devices/${deviceId}/revoke`, {
+    const res = await authFetch(`/api/devices/${deviceId}/revoke`, {
       method: 'POST'
     });
     return res.json();
@@ -449,17 +584,17 @@ export const api = {
 
   // --- COMMERCIALIZATION PHASE 5: SUBSCRIPTION BILLING ---
   async getBillingState(): Promise<import('../types').OrganizationBillingState> {
-    const res = await fetch('/api/billing/state');
+    const res = await authFetch('/api/billing/state');
     return res.json();
   },
 
   async getBillingPlans(): Promise<import('../types').BillingPlanInfo[]> {
-    const res = await fetch('/api/billing/plans');
+    const res = await authFetch('/api/billing/plans');
     return res.json();
   },
 
   async createSubscriptionCheckout(payload: { plan_key: string; interval: 'MONTHLY' | 'ANNUAL'; email?: string }) {
-    const res = await fetch('/api/billing/checkout', {
+    const res = await authFetch('/api/billing/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -468,7 +603,7 @@ export const api = {
   },
 
   async changeSubscriptionPlan(payload: { new_plan_key: string; interval: 'MONTHLY' | 'ANNUAL' }) {
-    const res = await fetch('/api/billing/change-plan', {
+    const res = await authFetch('/api/billing/change-plan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -477,7 +612,7 @@ export const api = {
   },
 
   async cancelSubscription() {
-    const res = await fetch('/api/billing/cancel', {
+    const res = await authFetch('/api/billing/cancel', {
       method: 'POST'
     });
     return res.json();
@@ -485,22 +620,22 @@ export const api = {
 
   // --- COMMERCIALIZATION PHASE 8: PRIVACY-FIRST DATA GOVERNANCE ---
   async getPrivacyGovernance(): Promise<import('../types').GovernanceManifest> {
-    const res = await fetch('/api/privacy/governance');
+    const res = await authFetch('/api/privacy/governance');
     return res.json();
   },
 
   async getTelemetryInspection(scanId: string): Promise<import('../types').TelemetryInspectionResult> {
-    const res = await fetch(`/api/privacy/telemetry-preview/${scanId}`);
+    const res = await authFetch(`/api/privacy/telemetry-preview/${scanId}`);
     return res.json();
   },
 
   async getRetentionPolicy(): Promise<import('../types').RetentionPolicy> {
-    const res = await fetch('/api/privacy/retention-policy');
+    const res = await authFetch('/api/privacy/retention-policy');
     return res.json();
   },
 
   async updateRetentionPolicy(payload: { cloud_metadata_retention_days: number; auto_purge_enabled?: boolean }) {
-    const res = await fetch('/api/privacy/retention-policy', {
+    const res = await authFetch('/api/privacy/retention-policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -509,7 +644,7 @@ export const api = {
   },
 
   async purgeExpiredCloudTelemetry() {
-    const res = await fetch('/api/privacy/purge-cloud-telemetry', {
+    const res = await authFetch('/api/privacy/purge-cloud-telemetry', {
       method: 'POST'
     });
     return res.json();
@@ -517,7 +652,7 @@ export const api = {
 
   // --- COMMERCIALIZATION PHASE 9: CRYPTOGRAPHICALLY VERIFIABLE AUDIT REPORTS ---
   async verifyReportPublic(reportId: string): Promise<import('../types').ReportVerificationResult> {
-    const res = await fetch(`/api/reports/verify/${encodeURIComponent(reportId)}`);
+    const res = await authFetch(`/api/reports/verify/${encodeURIComponent(reportId)}`);
     return res.json();
   },
 
@@ -527,7 +662,7 @@ export const api = {
     engine_version?: string;
     checklist_version?: string;
   }) {
-    const res = await fetch('/api/reports/register', {
+    const res = await authFetch('/api/reports/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -536,12 +671,12 @@ export const api = {
   },
 
   async getAuditReportsList(): Promise<import('../types').StoredAuditReportItem[]> {
-    const res = await fetch('/api/reports/list');
+    const res = await authFetch('/api/reports/list');
     return res.json();
   },
 
   async revokeAuditReport(reportId: string, reason: string) {
-    const res = await fetch(`/api/reports/revoke/${encodeURIComponent(reportId)}`, {
+    const res = await authFetch(`/api/reports/revoke/${encodeURIComponent(reportId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason })
@@ -553,7 +688,7 @@ export const api = {
   async runEndpointAssessment(payload?: {
     linkAuditSessionId?: string;
   }): Promise<import('../types').EndpointAssessment> {
-    const res = await fetch('/api/endpoint/assess', {
+    const res = await authFetch('/api/endpoint/assess', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload || {})
@@ -566,13 +701,13 @@ export const api = {
   },
 
   async getEndpointAssessments(limit: number = 20): Promise<import('../types').EndpointAssessment[]> {
-    const res = await fetch(`/api/endpoint/assessments?limit=${limit}`);
+    const res = await authFetch(`/api/endpoint/assessments?limit=${limit}`);
     if (!res.ok) return [];
     return res.json();
   },
 
   async getEndpointAssessmentById(id: string): Promise<import('../types').EndpointAssessment> {
-    const res = await fetch(`/api/endpoint/assessment/${encodeURIComponent(id)}`);
+    const res = await authFetch(`/api/endpoint/assessment/${encodeURIComponent(id)}`);
     if (!res.ok) {
       throw new Error(`Assessment ${id} not found`);
     }
@@ -581,19 +716,19 @@ export const api = {
 
   async getLatestEndpointAssessment(deviceId?: string): Promise<import('../types').EndpointAssessment | null> {
     const query = deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : '';
-    const res = await fetch(`/api/endpoint/latest${query}`);
+    const res = await authFetch(`/api/endpoint/latest${query}`);
     if (!res.ok) return null;
     return res.json();
   },
 
   async getEndpoints(): Promise<import('../types').EndpointRecord[]> {
-    const res = await fetch('/api/endpoint/endpoints');
+    const res = await authFetch('/api/endpoint/endpoints');
     if (!res.ok) return [];
     return res.json();
   },
 
   async getEndpointById(id: string): Promise<import('../types').EndpointRecord> {
-    const res = await fetch(`/api/endpoint/endpoints/${encodeURIComponent(id)}`);
+    const res = await authFetch(`/api/endpoint/endpoints/${encodeURIComponent(id)}`);
     if (!res.ok) {
       throw new Error(`Endpoint ${id} not found`);
     }
@@ -601,13 +736,13 @@ export const api = {
   },
 
   async getEndpointTargets(): Promise<import('../types').WebAccessTarget[]> {
-    const res = await fetch('/api/endpoint/targets');
+    const res = await authFetch('/api/endpoint/targets');
     if (!res.ok) return [];
     return res.json();
   },
 
   async getOfflineLicenseStatus() {
-    const res = await fetch('/api/license/offline-status');
+    const res = await authFetch('/api/license/offline-status');
     if (!res.ok) {
       throw new Error('Failed to fetch offline license status');
     }
@@ -615,7 +750,7 @@ export const api = {
   },
 
   async revalidateOfflineLicense() {
-    const res = await fetch('/api/license/revalidate', {
+    const res = await authFetch('/api/license/revalidate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -627,7 +762,7 @@ export const api = {
   },
 
   async logClockMonitorHeartbeat(metrics: { deltaMs: number; elapsedPerformanceMs: number; elapsedDateMs: number; status: string }) {
-    const res = await fetch('/api/license/clock-monitor/heartbeat', {
+    const res = await authFetch('/api/license/clock-monitor/heartbeat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(metrics)
@@ -639,7 +774,7 @@ export const api = {
   },
 
   async getClockMonitorLogs(): Promise<Array<{ id: string; timestamp: string; delta_ms: number; elapsed_performance_ms: number; elapsed_date_ms: number; status: string }>> {
-    const res = await fetch('/api/license/clock-monitor/logs');
+    const res = await authFetch('/api/license/clock-monitor/logs');
     if (!res.ok) {
       throw new Error('Failed to fetch clock monitor forensic logs');
     }
