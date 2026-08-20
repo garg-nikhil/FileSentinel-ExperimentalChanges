@@ -48,7 +48,11 @@ export async function ensureAuthenticated(): Promise<string> {
   try {
     const loginRes = await fetch('/api/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-CSRF-Token': 'filesentinel-client'
+      },
       body: JSON.stringify({
         username: 'devadmin',
         password: 'devpassword',
@@ -76,6 +80,8 @@ async function authFetch(url: string, options: RequestInit = {}): Promise<Respon
   }
 
   const headers = new Headers(options.headers || {});
+  headers.set('X-Requested-With', 'XMLHttpRequest');
+  headers.set('X-CSRF-Token', 'filesentinel-client');
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
@@ -88,7 +94,11 @@ async function authFetch(url: string, options: RequestInit = {}): Promise<Respon
       try {
         const rotateRes = await fetch('/api/auth/rotate-token', {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` }
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-CSRF-Token': 'filesentinel-client'
+          }
         });
         if (rotateRes.ok) {
           const rotateData = await rotateRes.json();

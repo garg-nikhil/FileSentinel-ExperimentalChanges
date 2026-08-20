@@ -131,7 +131,10 @@ export class FileScannerEngine {
 
   public isSupportedFile(filePath: string): boolean {
     const ext = path.extname(filePath).toLowerCase();
-    return ['.xlsx', '.xlsm', '.csv', '.docx', '.docm', '.txt', '.pptx', '.pptm', '.pdf'].includes(ext);
+    return [
+      '.xlsx', '.xlsm', '.csv', '.docx', '.docm', '.txt', '.pptx', '.pptm', '.pdf',
+      '.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.gif'
+    ].includes(ext);
   }
 
   // --- SAFE MODULAR EXTRACTION ---

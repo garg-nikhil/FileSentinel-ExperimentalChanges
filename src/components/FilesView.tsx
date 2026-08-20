@@ -243,6 +243,11 @@ export const FilesView: React.FC<FilesViewProps> = ({ onSelectFile }) => {
             <option value=".txt">.txt</option>
             <option value=".pptx">.pptx</option>
             <option value=".pdf">.pdf</option>
+            <option value=".png">.png</option>
+            <option value=".jpg">.jpg</option>
+            <option value=".jpeg">.jpeg</option>
+            <option value=".webp">.webp</option>
+            <option value=".tiff">.tiff</option>
           </select>
         </div>
       </div>

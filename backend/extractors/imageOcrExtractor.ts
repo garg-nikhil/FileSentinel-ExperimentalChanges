@@ -52,7 +52,7 @@ export class ImageOcrExtractor extends BaseExtractor {
 
   public canHandle(filePath: string): boolean {
     const ext = path.extname(filePath).toLowerCase();
-    return ['.jpg', '.jpeg', '.png', '.webp', '.tiff', '.tif'].includes(ext);
+    return ['.jpg', '.jpeg', '.png', '.webp', '.tiff', '.tif', '.bmp', '.gif'].includes(ext);
   }
 
   /**

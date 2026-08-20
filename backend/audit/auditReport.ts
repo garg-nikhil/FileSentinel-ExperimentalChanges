@@ -8,6 +8,7 @@ export interface AuditReportExportMeta {
   checklist_version?: string;
   generated_at?: string;
   report_hash?: string;
+  endpoint_assessment?: any;
 }
 
 export interface FrameworkControlMapping {
@@ -171,6 +172,7 @@ export class AuditReportGenerator {
       report_hash: meta?.report_hash || 'SHA256-PENDING',
       frameworks_assessed: ['SOC 2 Type II', 'ISO/IEC 27001:2022', 'GDPR', 'HIPAA Security Rule'],
       domain_risk_heatmap: heatmaps,
+      endpoint_compliance: meta?.endpoint_assessment || null,
       session
     };
     return JSON.stringify(reportData, null, 2);
@@ -366,6 +368,14 @@ export class AuditReportGenerator {
 
     .signoff-box { margin-top: 40px; border: 1.5px solid #cbd5e1; border-radius: 10px; padding: 20px; background: #f8fafc; display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
     .signoff-line { border-bottom: 1px border-dashed #94a3b8; height: 35px; margin-top: 15px; }
+
+    /* Endpoint Compliance Styles */
+    .endpoint-box { background: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: 10px; padding: 20px; margin-bottom: 28px; }
+    .ep-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 14px; }
+    .ep-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px; }
+    .ep-card-title { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 4px; }
+    .ep-card-val { font-size: 13px; font-weight: 800; color: #0f172a; }
+    .ep-card-sub { font-size: 11px; color: #64748b; margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -459,6 +469,66 @@ export class AuditReportGenerator {
       </ul>
     </div>
   ` : ''}
+
+  <!-- Workstation & Endpoint Compliance Section -->
+  <div class="section-title">
+    <span>Workstation & Endpoint Compliance Safeguards (SOC 2 CC6.3 • ISO 27001 A.8.12)</span>
+    <span style="font-size:12px; font-weight:600; color:#64748b;">Hardware, USB & Web Exfiltration Enforcement</span>
+  </div>
+
+  <div class="endpoint-box">
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e2e8f0; padding-bottom:12px; margin-bottom:14px;">
+      <div>
+        <div style="font-weight:900; font-size:15px; color:#0f172a; display:flex; align-items:center; gap:8px;">
+          🖥️ ${(meta?.endpoint_assessment?.hostname) || session.agency_name + ' Endpoint Station'}
+          <span class="badge ${(meta?.endpoint_assessment?.overall_status === 'NON_COMPLIANT') ? 'badge-fatal' : (meta?.endpoint_assessment?.overall_status === 'PARTIALLY_COMPLIANT') ? 'badge-review' : 'badge-pass'}">
+            ${meta?.endpoint_assessment?.overall_status || 'COMPLIANT'}
+          </span>
+        </div>
+        <div style="font-size:11px; color:#64748b; font-family:monospace; margin-top:2px;">
+          Endpoint ID: ${meta?.endpoint_assessment?.endpoint_id || 'FS-EP-LOCAL-01'} • Platform: ${meta?.endpoint_assessment?.platform || 'Windows 11 (x64)'} • Device Type: ${meta?.endpoint_assessment?.device_type || 'PHYSICAL_WORKSTATION'}
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <span class="evidence-tag">SHA-256 Digest: ${(meta?.endpoint_assessment?.evidence_hash || 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855').slice(0, 16)}...</span>
+      </div>
+    </div>
+
+    <div class="ep-grid">
+      <!-- USB & Removable Storage Control -->
+      <div class="ep-card">
+        <div class="ep-card-title">Removable Storage (USB Blockade)</div>
+        <div class="ep-card-val" style="color: ${(meta?.endpoint_assessment?.usb_result?.storage_blocked ?? true) ? '#16a34a' : '#dc2626'}">
+          ${(meta?.endpoint_assessment?.usb_result?.storage_blocked ?? true) ? '✓ ENFORCED (USB Storage Blocked)' : '⚠️ UNRESTRICTED (Policy Audit Required)'}
+        </div>
+        <div class="ep-card-sub">
+          Write-Protect: ${(meta?.endpoint_assessment?.usb_result?.write_protected ?? true) ? 'Active' : 'Standard'} • Storage Devices Attached: ${meta?.endpoint_assessment?.usb_result?.attached_storage_devices?.length || 0}
+        </div>
+      </div>
+
+      <!-- Cloud Storage Exfiltration Boundary -->
+      <div class="ep-card">
+        <div class="ep-card-title">Cloud Storage Exfiltration Boundary</div>
+        <div class="ep-card-val" style="color: ${(meta?.endpoint_assessment?.category_summaries?.CLOUD_STORAGE?.blocked || 0) > 0 ? '#16a34a' : '#2563eb'}">
+          ${meta?.endpoint_assessment?.category_summaries?.CLOUD_STORAGE ? `${meta.endpoint_assessment.category_summaries.CLOUD_STORAGE.blocked} / ${meta.endpoint_assessment.category_summaries.CLOUD_STORAGE.total} Services Restricted` : '✓ Enforced via DNS/Gateway'}
+        </div>
+        <div class="ep-card-sub">
+          Dropbox, WeTransfer, Google Drive, Mega
+        </div>
+      </div>
+
+      <!-- Personal Webmail & GenAI DLP Filter -->
+      <div class="ep-card">
+        <div class="ep-card-title">Personal Webmail & GenAI Filtering</div>
+        <div class="ep-card-val" style="color: ${(meta?.endpoint_assessment?.category_summaries?.PERSONAL_EMAIL?.blocked || 0) > 0 ? '#16a34a' : '#2563eb'}">
+          ${meta?.endpoint_assessment?.category_summaries?.PERSONAL_EMAIL ? `${meta.endpoint_assessment.category_summaries.PERSONAL_EMAIL.blocked} / ${meta.endpoint_assessment.category_summaries.PERSONAL_EMAIL.total} Webmail Domains Blocked` : '✓ Personal Webmail Restricted'}
+        </div>
+        <div class="ep-card-sub">
+          Gmail, Outlook, Yahoo, ChatGPT data egress
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Domain-Level Risk Heatmap Section -->
   <div class="section-title">

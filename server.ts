@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { createApiRouter } from './backend/routes.js';
-import { securityHeaders, corsMiddleware, enforceContentType, rateLimiter, csrfProtection, safeErrorHandler } from './backend/securityMiddleware.js';
+import { securityHeaders, corsMiddleware, enforceContentType, rateLimiter, csrfProtection, safeErrorHandler, apiCacheControl } from './backend/securityMiddleware.js';
 import { FileIntegrityMonitor } from './backend/fimService.js';
 
 async function startServer() {
@@ -16,16 +16,21 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
 
+  // Security Hardening #10: Never trust proxy headers for authentication or host determination
+  app.set('trust proxy', false);
+
   // Security Middleware
   app.use(securityHeaders);
   app.use(corsMiddleware);
   app.use(express.json({ limit: '100kb' }));
   app.use(enforceContentType);
   app.use(csrfProtection);
+  // Security Hardening #14: Prevent caching of API responses
+  app.use('/api', apiCacheControl);
 
   // Rate limiters for sensitive endpoints
-  const authRateLimiter = rateLimiter({ windowMs: 60000, max: 20 });
-  const apiRateLimiter = rateLimiter({ windowMs: 60000, max: 150 });
+  const authRateLimiter = rateLimiter({ windowMs: 60000, max: process.env.NODE_ENV === 'production' ? 30 : 120 });
+  const apiRateLimiter = rateLimiter({ windowMs: 60000, max: process.env.NODE_ENV === 'production' ? 300 : 1000 });
   const webhookRateLimiter = rateLimiter({ windowMs: 60000, max: 200 });
 
   app.use('/api/auth/login', authRateLimiter);
@@ -53,7 +58,8 @@ async function startServer() {
     });
   }
 
-  const HOST = process.env.HOST || (process.env.TAURI_DESKTOP ? '127.0.0.1' : '0.0.0.0');
+  // Security Hardening #3: Default to loopback for local-first security; require explicit HOST env var for network binding
+  const HOST = process.env.HOST || '127.0.0.1';
 
   const server = app.listen(PORT, HOST, () => {
     console.log(`[FileSentinel] Local-First Security Server running on http://${HOST}:${PORT}`);

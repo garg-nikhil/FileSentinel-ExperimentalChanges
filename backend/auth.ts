@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 
 export const usedJtis = new Set<string>();
+const MAX_JTI_ENTRIES = 10000; // Security Hardening #7: Prevent unbounded JTI memory growth
 
 export function generateIpcJwt(payload: {
   deviceId: string;
@@ -65,6 +66,11 @@ export function verifyIpcJwt(token: string, secret: string): any {
 
     // Anti-Replay: check JTI
     if (payload.jti) {
+      // Security Hardening #7: Enforce hard cap on JTI tracking set
+      if (usedJtis.size >= MAX_JTI_ENTRIES) {
+        console.warn('[Auth] JTI tracking set reached maximum capacity. Rejecting to prevent memory exhaustion.');
+        return null;
+      }
       if (usedJtis.has(payload.jti)) {
         return null; // Replayed
       }
@@ -97,6 +103,12 @@ declare global {
       user?: AuthenticatedUser;
     }
   }
+}
+
+// Security Hardening #4: Hash session tokens before database storage
+// Tokens are stored as SHA-256 hashes so a database breach doesn't expose usable session tokens
+export function hashSessionToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }
 
 export function hashPassword(password: string): string {
@@ -165,7 +177,7 @@ export function authenticateRequest(req: Request, res: Response, next: NextFunct
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
   const deviceIdHeader = req.headers['x-device-id'] as string | undefined;
 
-  const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
+  const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' || process.env.NODE_ENV !== 'production';
   const activeDb = (req.app?.locals?.db) || getDatabase();
 
   const ipcSecret = process.env.FILE_SENTINEL_IPC_SECRET;
@@ -252,14 +264,14 @@ export function authenticateRequest(req: Request, res: Response, next: NextFunct
   try {
     const db = activeDb;
     const session = db.prepare(`
-      SELECT s.token, s.user_id, s.org_id, s.device_id, s.expires_at,
+      SELECT s.token_hash, s.user_id, s.org_id, s.device_id, s.expires_at,
              u.username, u.role, u.disabled,
              d.revoked as device_revoked
       FROM sessions s
       JOIN users u ON s.user_id = u.user_id
       LEFT JOIN devices d ON s.device_id = d.device_id
-      WHERE s.token = ?
-    `).get(token) as any;
+      WHERE s.token_hash = ?
+    `).get(hashSessionToken(token)) as any;
 
     if (!session) {
       return res.status(401).json({ error: 'Unauthorized: Invalid session token' });
@@ -283,7 +295,7 @@ export function authenticateRequest(req: Request, res: Response, next: NextFunct
       username: session.username,
       role: session.role as UserRole,
       deviceId: session.device_id,
-      sessionId: session.token
+      sessionId: token // Return raw token (not hash) as the session identifier for the client
     };
 
     next();

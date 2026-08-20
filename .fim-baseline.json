@@ -1,0 +1,8 @@
+{
+  "backend/auth.ts": "360c7da348fb9a9155e737e189454d8a74091c56fe8785022672c63b0cbdb429",
+  "backend/licensing.ts": "e70504b40da69dd3fecf0b3315f978025401472bb2565bec7a706a874de4a3b1",
+  "backend/db.ts": "9489423c91fb2f064552fa764bc276a3c899afbd13917e8ee1974eb27b4d3516",
+  "backend/routes.ts": "f78b5eff8e196b57b3ce7545bf7694ac4015ac3e6d0e2ba5b7583de531e649a0",
+  "backend/securityMiddleware.ts": "bd07a73284bd19f157b400453c079434ba245cc0cc1d85a798098751f3a6954d",
+  "backend/audit/verifiableReportService.ts": "d649f0c104027ed73e4da3809a44d994467ec68b90943ce57db278a9953c1931"
+}

@@ -40,6 +40,7 @@ FileSentinel is a local-first file security, data loss prevention (DLP), and com
 - `.txt` — Plain Text (AWS keys, private keys, JWTs, database connection strings)
 - `.pptx` — PowerPoint Presentations (speaker notes, hidden slides)
 - `.pdf` — PDF Documents (PDF JavaScript actions, internal network references)
+- `.jpg`, `.jpeg`, `.png`, `.webp`, `.tiff`, `.bmp` — Images & Scanned Documents (Local Tesseract OCR text extraction, ID cards, receipts, certificate numbers)
 
 ---
 

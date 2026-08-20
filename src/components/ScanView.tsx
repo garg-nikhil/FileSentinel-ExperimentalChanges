@@ -6,7 +6,7 @@ import {
   FolderSearch, Play, Pause, RefreshCw, CheckCircle2, AlertTriangle, 
   ShieldCheck, UploadCloud, Folder, Trash2, CheckSquare, Square, 
   FileText, Search, Clock, PauseCircle, AlertCircle, CheckCircle, FileCode,
-  RotateCcw, Timer, Zap, Hourglass, FolderPlus
+  RotateCcw, Timer, Zap, Hourglass
 } from 'lucide-react';
 import { ScanProgressGauge } from './ScanProgressGauge';
 
@@ -336,50 +336,6 @@ export const ScanView: React.FC<ScanViewProps> = ({
     }
   };
 
-  const loadSampleFolders = () => {
-    const samples: UploadedFolder[] = [
-      {
-        id: 'sample_finance',
-        folderName: 'Finance Vault (Invoices & Cards)',
-        rootPath: './sample-files/finance',
-        fileCount: 4,
-        status: 'completed',
-        progress: 100,
-        selected: true
-      },
-      {
-        id: 'sample_keys',
-        folderName: 'Dev & Cloud Secrets',
-        rootPath: './sample-files/dev-keys',
-        fileCount: 3,
-        status: 'completed',
-        progress: 100,
-        selected: true
-      },
-      {
-        id: 'sample_security',
-        folderName: 'Security & Auth Tokens',
-        rootPath: './sample-files/security',
-        fileCount: 3,
-        status: 'completed',
-        progress: 100,
-        selected: true
-      }
-    ];
-
-    setUploadedFolders(prev => {
-      const existingPaths = new Set(prev.map(p => p.rootPath));
-      const newItems = samples.filter(s => !existingPaths.has(s.rootPath));
-      return [...prev, ...newItems];
-    });
-    setErrorMsg(null);
-    showToast({
-      title: 'SAMPLE FOLDERS LOADED',
-      message: 'Added sample workspace audit folders (Finance, Dev Keys, Security). Click "Scan Now" to begin analysis.',
-      type: 'info'
-    });
-  };
-
   const toggleFolderSelection = (id: string) => {
     setUploadedFolders(prev => prev.map(f => f.id === id ? { ...f, selected: !f.selected } : f));
   };
@@ -539,18 +495,9 @@ export const ScanView: React.FC<ScanViewProps> = ({
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <button 
-              onClick={loadSampleFolders}
-              disabled={isScanning}
-              className="bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-700/50 text-xs px-4 py-2.5 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-50"
-              title="Load built-in test directories (Finance, Dev Keys, Security)"
-            >
-              <FolderPlus className="w-4 h-4" />
-              Load Sample Demo Folders
-            </button>
-            <button 
               onClick={() => fileInputRef.current?.click()}
               disabled={isScanning}
-              className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs px-4 py-2.5 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-50"
+              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-4 py-2.5 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-50"
             >
               <UploadCloud className="w-4 h-4" />
               Upload Local Folder
@@ -576,16 +523,16 @@ export const ScanView: React.FC<ScanViewProps> = ({
             </div>
             <div>
               <p className="text-sm font-medium text-slate-300">No folders selected yet</p>
-              <p className="text-xs text-slate-500 mt-1">Upload a local folder or click 'Load Sample Demo Folders' to test immediately.</p>
+              <p className="text-xs text-slate-500 mt-1">Upload a local workspace folder to begin compliance and DLP analysis.</p>
             </div>
             <div className="pt-2 flex justify-center">
               <button
-                onClick={loadSampleFolders}
+                onClick={() => fileInputRef.current?.click()}
                 disabled={isScanning}
                 className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm"
               >
-                <FolderPlus className="w-4 h-4" />
-                Load Sample Audit Folders
+                <UploadCloud className="w-4 h-4" />
+                Upload Local Folder
               </button>
             </div>
           </div>
@@ -705,8 +652,8 @@ export const ScanView: React.FC<ScanViewProps> = ({
         {/* Supported Formats */}
         <div className="border-t border-slate-800/80 pt-4 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-400">
           <span className="font-semibold text-slate-300">Supported Formats:</span>
-          <div className="flex gap-2">
-            {['.XLSX', '.CSV', '.DOCX', '.TXT', '.PPTX', '.PDF'].map(ext => (
+          <div className="flex flex-wrap gap-2">
+            {['.XLSX', '.CSV', '.DOCX', '.TXT', '.PPTX', '.PDF', '.PNG', '.JPG', '.JPEG', '.WEBP', '.TIFF'].map(ext => (
               <span key={ext} className="bg-slate-950 border border-slate-800 text-slate-300 px-2 py-1 rounded font-mono font-medium">
                 {ext}
               </span>
