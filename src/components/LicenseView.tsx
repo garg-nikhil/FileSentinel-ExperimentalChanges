@@ -122,10 +122,17 @@ export const LicenseView: React.FC = () => {
             <Lock className="w-3.5 h-3.5" /> Suspended
           </span>
         );
+      case 'NO_LICENSE':
+      case 'CANCELLED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700">
+            <KeyRound className="w-3.5 h-3.5 text-slate-400" /> No License Active
+          </span>
+        );
       default:
         return (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">
-            {status || 'Unknown'}
+            {uiState || status || 'Unknown'}
           </span>
         );
     }

@@ -52,6 +52,14 @@ export function getFileLimitForExt(ext: string): number {
     case '.pptm': return RESOURCE_LIMITS.maxPptxSizeBytes;
     case '.csv': return RESOURCE_LIMITS.maxCsvSizeBytes;
     case '.txt': return RESOURCE_LIMITS.maxTxtSizeBytes;
+    case '.png':
+    case '.jpg':
+    case '.jpeg':
+    case '.webp':
+    case '.tiff':
+    case '.tif':
+    case '.bmp':
+    case '.gif': return RESOURCE_LIMITS.maxFileSizeBytes;
     default: return RESOURCE_LIMITS.maxFileSizeBytes;
   }
 }

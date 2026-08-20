@@ -50,6 +50,10 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
     // SQLCipher Encryption Setup (where compatible)
     const osKey = getOrGenerateOSProtectedKey();
     const keyHex = crypto.createHmac('sha256', osKey).update('filesentinel-salt-2026').digest('hex');
+    // Security Hardening #1: Strict hex validation to prevent SQL injection via PRAGMA interpolation
+    if (!/^[0-9a-f]{64}$/.test(keyHex)) {
+      throw new Error('FATAL: Derived encryption key is not valid hex. Refusing to initialize database. Fail-closed enforced.');
+    }
     db.exec(`PRAGMA key = '${keyHex}';`);
 
     // Verify DB integrity and fail closed on authentication/decryption failure
@@ -309,7 +313,7 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       );
 
       CREATE TABLE IF NOT EXISTS sessions (
-        token TEXT PRIMARY KEY,
+        token_hash TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         org_id TEXT NOT NULL,
         device_id TEXT,
@@ -696,26 +700,44 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
           db.exec("ALTER TABLE audit_reports ADD COLUMN public_key TEXT;");
         }
       }
+
+      // Security Hardening #4: Migrate sessions.token -> sessions.token_hash
+      const sessCols = db.prepare("PRAGMA table_info(sessions)").all() as { name: string }[];
+      if (sessCols.some(c => c.name === 'token') && !sessCols.some(c => c.name === 'token_hash')) {
+        // Clear all existing sessions (they'll need to re-authenticate after migration)
+        db.exec('DELETE FROM sessions;');
+        db.exec('ALTER TABLE sessions RENAME COLUMN token TO token_hash;');
+        console.log('[DB Migration] Migrated sessions table: token -> token_hash');
+      }
     } catch (migErr) {
       console.warn('[DB Migration] migration check:', migErr);
     }
 
-    // Seed default system administrator if none exists (dev mode only)
-    const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
-    if (isDevMode) {
-      const sysAdminCheck = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'SYS_ADMIN'").get() as { count: number };
-      if (sysAdminCheck.count === 0) {
-        const sysOrgId = 'org-sysadmin-internal';
-        const now = new Date().toISOString();
-        db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, suspended, created_at) VALUES (?, ?, 0, ?)').run(sysOrgId, 'FileSentinel Internal Administration', now);
+    // Seed default administrator if none exists
+    const userCountRow = db.prepare("SELECT COUNT(*) as count FROM users").get() as { count: number };
+    if (userCountRow.count === 0) {
+      const defaultOrgId = 'org-default-dev';
+      const now = new Date().toISOString();
+      db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, suspended, created_at) VALUES (?, ?, 0, ?)').run(defaultOrgId, 'Default Organization', now);
 
-        const sysUserId = 'user-sysadmin-01';
-        const saltBuf = crypto.randomBytes(16);
-        const passBuf = Buffer.from('SysAdmin123!', 'utf8');
-        const hashBuf = crypto.scryptSync(passBuf, saltBuf, 64);
-        const sysHash = `${saltBuf.toString('hex')}:${hashBuf.toString('hex')}`;
-        db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(sysUserId, sysOrgId, 'sysadmin', sysHash, 'SYS_ADMIN', now);
-      }
+      const defaultUserId = 'user-default-dev';
+      const saltBuf = crypto.randomBytes(16);
+      const passBuf = Buffer.from('devpassword', 'utf8');
+      const hashBuf = crypto.scryptSync(passBuf, saltBuf, 64);
+      const devHash = `${saltBuf.toString('hex')}:${hashBuf.toString('hex')}`;
+      db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(defaultUserId, defaultOrgId, 'devadmin', devHash, 'ORG_ADMIN', now);
+
+      const defaultDeviceId = 'dev-device-default';
+      db.prepare('INSERT OR IGNORE INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, 0, ?)').run(defaultDeviceId, defaultOrgId, 'Default Local Device', now);
+
+      const sysOrgId = 'org-sysadmin-internal';
+      const sysUserId = 'user-sysadmin-01';
+      const sysSalt = crypto.randomBytes(16);
+      const sysPassBuf = Buffer.from('SysAdmin123!', 'utf8');
+      const sysHashBuf = crypto.scryptSync(sysPassBuf, sysSalt, 64);
+      const sysHash = `${sysSalt.toString('hex')}:${sysHashBuf.toString('hex')}`;
+      db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, suspended, created_at) VALUES (?, ?, 0, ?)').run(sysOrgId, 'FileSentinel Internal Administration', now);
+      db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(sysUserId, sysOrgId, 'sysadmin', sysHash, 'SYS_ADMIN', now);
     }
 
     // Seed default plans
@@ -755,61 +777,59 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       );
     }
 
-    // Seed default organization, user, device, and license if devadmin does not exist (dev mode only)
-    if (process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production') {
-      const devAdminCheck = db.prepare("SELECT COUNT(*) as count FROM users WHERE username = 'devadmin'").get() as { count: number };
-      if (devAdminCheck.count === 0) {
-        const defaultOrgId = 'org-default-dev';
-        const now = new Date().toISOString();
-        db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)').run(defaultOrgId, 'Default Dev Organization', now);
+    // Seed default organization, user, device, and license if table is empty
+    const licenseCount = (db.prepare("SELECT COUNT(*) as count FROM licenses").get() as { count: number }).count;
+    if (licenseCount === 0) {
+      const defaultOrgId = 'org-default-dev';
+      const now = new Date().toISOString();
+      db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)').run(defaultOrgId, 'Default Dev Organization', now);
 
-        const defaultUserId = 'user-default-dev';
-        const saltBuf = crypto.randomBytes(16);
-        const passBuf = Buffer.from('devpassword', 'utf8');
-        const hashBuf = crypto.scryptSync(passBuf, saltBuf, 64);
-        const defaultHash = `${saltBuf.toString('hex')}:${hashBuf.toString('hex')}`;
-        db.prepare('INSERT INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(defaultUserId, defaultOrgId, 'devadmin', defaultHash, 'ORG_ADMIN', now);
+      const defaultUserId = 'user-default-dev';
+      const saltBuf = crypto.randomBytes(16);
+      const passBuf = Buffer.from('devpassword', 'utf8');
+      const hashBuf = crypto.scryptSync(passBuf, saltBuf, 64);
+      const defaultHash = `${saltBuf.toString('hex')}:${hashBuf.toString('hex')}`;
+      db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(defaultUserId, defaultOrgId, 'devadmin', defaultHash, 'ORG_ADMIN', now);
 
-        const defaultDeviceId = 'dev-device-default';
-        db.prepare('INSERT INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, 0, ?)').run(defaultDeviceId, defaultOrgId, 'Default Development Device', now);
+      const defaultDeviceId = 'dev-device-default';
+      db.prepare('INSERT OR IGNORE INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, 0, ?)').run(defaultDeviceId, defaultOrgId, 'Default Development Device', now);
 
-        // Seed default active enterprise license for dev organization
-        const defaultLicenseId = 'lic-default-dev';
-        const startsAt = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-        const expiresAt = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString();
-        const graceUntil = new Date(Date.now() + (365 + 7) * 24 * 3600 * 1000).toISOString();
-        const enterpriseFeatures = JSON.stringify(['LOCAL_SCANNING', 'AUDIT_ENGINE', 'MULTI_FOLDER_SCAN', 'CLOUD_EVIDENCE_UPLOAD', 'CENTRAL_HISTORY', 'ADVANCED_REPORTING', 'API_ACCESS']);
+      // Seed default active enterprise license for dev organization
+      const defaultLicenseId = 'lic-default-dev';
+      const startsAt = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+      const expiresAt = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString();
+      const graceUntil = new Date(Date.now() + (365 + 7) * 24 * 3600 * 1000).toISOString();
+      const enterpriseFeatures = JSON.stringify(['LOCAL_SCANNING', 'AUDIT_ENGINE', 'MULTI_FOLDER_SCAN', 'CLOUD_EVIDENCE_UPLOAD', 'CENTRAL_HISTORY', 'ADVANCED_REPORTING', 'API_ACCESS']);
 
-        db.prepare(`
-          INSERT INTO licenses (
-            license_id, organization_id, plan_id, status, issued_at, starts_at, expires_at,
-            grace_until, max_users, max_devices, scan_limit, scans_used, feature_flags,
-            created_at, updated_at, last_validated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
-        `).run(
-          defaultLicenseId,
-          defaultOrgId,
-          'plan-enterprise',
-          'ACTIVE',
-          now,
-          startsAt,
-          expiresAt,
-          graceUntil,
-          100,
-          50,
-          -1,
-          enterpriseFeatures,
-          now,
-          now,
-          now
-        );
+      db.prepare(`
+        INSERT OR REPLACE INTO licenses (
+          license_id, organization_id, plan_id, status, issued_at, starts_at, expires_at,
+          grace_until, max_users, max_devices, scan_limit, scans_used, feature_flags,
+          created_at, updated_at, last_validated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+      `).run(
+        defaultLicenseId,
+        defaultOrgId,
+        'plan-enterprise',
+        'ACTIVE',
+        now,
+        startsAt,
+        expiresAt,
+        graceUntil,
+        100,
+        50,
+        -1,
+        enterpriseFeatures,
+        now,
+        now,
+        now
+      );
 
-        // Activate default device on the license
-        db.prepare(`
-          INSERT INTO license_devices (id, license_id, device_id, activated_at, status, last_seen_at)
-          VALUES (?, ?, ?, ?, 'ACTIVE', ?)
-        `).run('ldev-default-dev', defaultLicenseId, defaultDeviceId, now, now);
-      }
+      // Activate default device on the license
+      db.prepare(`
+        INSERT OR REPLACE INTO license_devices (id, license_id, device_id, activated_at, status, last_seen_at)
+        VALUES (?, ?, ?, ?, 'ACTIVE', ?)
+      `).run('ldev-default-dev', defaultLicenseId, defaultDeviceId, now, now);
     }
 
     // Seed default built-in rules if table is empty

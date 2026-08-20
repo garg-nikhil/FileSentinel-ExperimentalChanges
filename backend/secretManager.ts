@@ -23,6 +23,13 @@ export class SecretManager {
     }
     return val;
   })();
+
+  // Security Hardening #13: Dual-key grace period for secret rotation
+  private static previousJwtKey: string | null = null;
+  private static previousWebhookKey: string | null = null;
+  private static gracePeriodExpiresAt: number = 0;
+  private static readonly GRACE_PERIOD_MS = 15 * 60 * 1000; // 15 minutes
+
   private static lastRotationAt: string = new Date().toISOString();
   private static rotationIntervalDays: number = 30;
 
@@ -30,8 +37,35 @@ export class SecretManager {
     return this.jwtSecretKey;
   }
 
+  /**
+   * Returns the previous JWT secret if within the grace period, or null
+   */
+  public static getPreviousJwtSecret(): string | null {
+    if (this.previousJwtKey && Date.now() < this.gracePeriodExpiresAt) {
+      return this.previousJwtKey;
+    }
+    // Grace period expired, clear the old key
+    if (this.previousJwtKey) {
+      this.previousJwtKey = null;
+    }
+    return null;
+  }
+
   public static getWebhookSecret(): string {
     return this.webhookSecretKey;
+  }
+
+  /**
+   * Returns the previous webhook secret if within the grace period, or null
+   */
+  public static getPreviousWebhookSecret(): string | null {
+    if (this.previousWebhookKey && Date.now() < this.gracePeriodExpiresAt) {
+      return this.previousWebhookKey;
+    }
+    if (this.previousWebhookKey) {
+      this.previousWebhookKey = null;
+    }
+    return null;
   }
 
   /**
@@ -54,12 +88,18 @@ export class SecretManager {
     };
   }
 
-  public static rotateSecrets(): { success: boolean; rotatedAt: string; providerStatus: any } {
+  public static rotateSecrets(): { success: boolean; rotatedAt: string; gracePeriodMs: number; providerStatus: any } {
+    // Security Hardening #13: Retain previous keys for grace period before full invalidation
+    this.previousJwtKey = this.jwtSecretKey;
+    this.previousWebhookKey = this.webhookSecretKey;
+    this.gracePeriodExpiresAt = Date.now() + this.GRACE_PERIOD_MS;
+
     this.jwtSecretKey = crypto.randomBytes(32).toString('hex');
     this.webhookSecretKey = crypto.randomBytes(32).toString('hex');
     this.lastRotationAt = new Date().toISOString();
     const cloudSync = this.syncWithCloudSecretManager();
-    console.log('[SecretManager] Secrets rotated successfully at', this.lastRotationAt);
-    return { success: true, rotatedAt: this.lastRotationAt, providerStatus: cloudSync };
+    console.log(`[SecretManager] Secrets rotated successfully at ${this.lastRotationAt}. Previous keys valid for ${this.GRACE_PERIOD_MS / 1000}s grace period.`);
+    return { success: true, rotatedAt: this.lastRotationAt, gracePeriodMs: this.GRACE_PERIOD_MS, providerStatus: cloudSync };
   }
 }
+

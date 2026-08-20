@@ -13,7 +13,7 @@ import { AuditReportGenerator } from './audit/auditReport.js';
 import { INITIAL_AUDIT_CHECKLIST } from './audit/checklist.js';
 import { AuditScoringEngine } from './audit/scoring.js';
 import { isValidFileId, isValidScanId, isValidOrgId, isValidDeviceId, checkLoginThrottling, recordFailedLogin, recordSuccessfulLogin } from './securityMiddleware.js';
-import { authenticateRequest, requireRole, hashPassword, verifyPassword, logSecurityEvent, UserRole } from './auth.js';
+import { authenticateRequest, requireRole, hashPassword, verifyPassword, logSecurityEvent, UserRole, hashSessionToken } from './auth.js';
 import { LicensingEngine, FeatureEntitlement } from './licensing.js';
 import { TelemetryService } from './telemetry.js';
 import { BillingService } from './billing.js';
@@ -46,7 +46,22 @@ const storage = multer.diskStorage({
     cb(null, path.basename(file.originalname));
   }
 });
-const uploadLocalScan = multer({ storage });
+const ALLOWED_SCAN_EXTENSIONS = [
+  '.xlsx', '.csv', '.docx', '.txt', '.pptx', '.pdf', '.xlsm', '.docm', '.pptm',
+  '.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.gif'
+];
+const uploadLocalScan = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024, files: 100 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ALLOWED_SCAN_EXTENSIONS.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(null, false); // Silently reject disallowed file types
+    }
+  }
+});
 
 export function createApiRouter(customDb?: any) {
   const router = express.Router();
@@ -165,9 +180,12 @@ export function createApiRouter(customDb?: any) {
         failed_attempts: failInfo.attempts,
         locked: failInfo.locked
       });
-      return res.status(401).json({
-        error: 'Invalid username or password'
-      });
+      // Security Hardening #6: Add minimum delay to failed auth responses to slow brute-force
+      return setTimeout(() => {
+        res.status(401).json({
+          error: 'Invalid username or password'
+        });
+      }, 1000);
     }
 
     if (device_id) {
@@ -187,10 +205,11 @@ export function createApiRouter(customDb?: any) {
     const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
     const now = new Date().toISOString();
 
+    // Security Hardening #4: Store hashed session token, not raw token
     db.prepare(`
-      INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at)
+      INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(token, user.user_id, user.org_id, device_id || null, expiresAt, now);
+    `).run(hashSessionToken(token), user.user_id, user.org_id, device_id || null, expiresAt, now);
 
     logSecEvent('LOGIN_SUCCESS', 'SUCCESS', user.org_id, user.user_id, device_id, { username });
 
@@ -226,11 +245,11 @@ export function createApiRouter(customDb?: any) {
     const now = new Date().toISOString();
 
     // Revoke old token and issue new token atomically
-    db.prepare('DELETE FROM sessions WHERE token = ?').run(oldSessionToken);
+    db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashSessionToken(oldSessionToken));
     db.prepare(`
-      INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at)
+      INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(newToken, req.user!.userId, req.user!.orgId, req.user!.deviceId || null, newExpiresAt, now);
+    `).run(hashSessionToken(newToken), req.user!.userId, req.user!.orgId, req.user!.deviceId || null, newExpiresAt, now);
 
     logSecEvent('TOKEN_ROTATED', 'SUCCESS', req.user!.orgId, req.user!.userId, req.user!.deviceId);
 
@@ -286,7 +305,7 @@ export function createApiRouter(customDb?: any) {
 
   router.post('/auth/logout', authenticateRequest, (req: Request, res: Response) => {
     if (req.user?.sessionId && req.user.sessionId !== 'dev-session') {
-      db.prepare('DELETE FROM sessions WHERE token = ?').run(req.user.sessionId);
+      db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashSessionToken(req.user.sessionId));
     }
     res.json({ success: true });
   });
@@ -358,7 +377,11 @@ export function createApiRouter(customDb?: any) {
     }
     const newDisabled = targetUser.disabled === 1 ? 0 : 1;
     db.prepare('UPDATE users SET disabled = ? WHERE user_id = ?').run(newDisabled, user_id);
-    logSecEvent('USER_DISABLED', 'SUCCESS', req.user!.orgId, req.user!.userId, req.user!.deviceId, { target_user_id: user_id, disabled: newDisabled });
+    // Security Hardening #5: Revoke all sessions when user is disabled
+    if (newDisabled === 1) {
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user_id);
+    }
+    logSecEvent('USER_DISABLED', 'SUCCESS', req.user!.orgId, req.user!.userId, req.user!.deviceId, { target_user_id: user_id, disabled: newDisabled, sessions_revoked: newDisabled === 1 });
     res.json({ success: true, user_id, disabled: newDisabled });
   });
 
@@ -374,7 +397,9 @@ export function createApiRouter(customDb?: any) {
       return res.status(404).json({ error: 'User not found in organization' });
     }
     db.prepare('UPDATE users SET role = ? WHERE user_id = ?').run(role, user_id);
-    logSecEvent('ROLE_CHANGED', 'SUCCESS', req.user!.orgId, req.user!.userId, req.user!.deviceId, { target_user_id: user_id, new_role: role });
+    // Security Hardening #5: Revoke all sessions on role change to force re-authentication with new permissions
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user_id);
+    logSecEvent('ROLE_CHANGED', 'SUCCESS', req.user!.orgId, req.user!.userId, req.user!.deviceId, { target_user_id: user_id, new_role: role, sessions_revoked: true });
     res.json({ success: true, user_id, role });
   });
 
@@ -497,7 +522,7 @@ export function createApiRouter(customDb?: any) {
   router.get('/license/devices', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
     const license = licensingEngine.getLicenseForOrg(orgId);
-    if (!license) return res.status(404).json({ error: 'No license found for organization' });
+    if (!license) return res.json([]);
 
     const rows = db.prepare(`
       SELECT ld.*, d.device_name, d.registered_at, d.revoked
@@ -1377,6 +1402,8 @@ export function createApiRouter(customDb?: any) {
     const { enabled } = req.body;
 
     db.prepare('UPDATE rules SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
+    // Security Hardening #15: Audit log rule enable/disable changes
+    logSecEvent('RULE_TOGGLED', 'SUCCESS', req.user!.orgId, req.user!.userId, req.user!.deviceId, { rule_id: id, enabled: !!enabled });
     res.json({ success: true, id, enabled });
   });
 
@@ -1563,7 +1590,8 @@ export function createApiRouter(customDb?: any) {
           agency_name || 'Primary Telecalling & Collection Agency',
           auditor_name || 'Automated Compliance Inspector',
           undefined,
-          currentSettings.aiPrivacyMode || 'OFF'
+          currentSettings.aiPrivacyMode || 'OFF',
+          orgId
         );
 
         logAuditEvent('RUN_AUDIT_COMPLIANCE', validRoots.join(', '), undefined, 'SUCCESS', `Audit ID: ${session.audit_id}, Score: ${session.overall_score}`);
@@ -1903,6 +1931,31 @@ export function createApiRouter(customDb?: any) {
         session: session as any
       });
 
+      // Fetch latest or associated endpoint compliance assessment for the organization
+      let endpointAssessment: any = null;
+      try {
+        let epRow: any = null;
+        if (session.scan_id) {
+          epRow = db.prepare('SELECT * FROM endpoint_assessments WHERE org_id = ? AND (scan_id = ? OR id = ?) LIMIT 1').get(orgId, session.scan_id, session.scan_id) as any;
+        }
+        if (!epRow) {
+          epRow = db.prepare('SELECT * FROM endpoint_assessments WHERE org_id = ? ORDER BY timestamp DESC LIMIT 1').get(orgId) as any;
+        }
+        if (epRow) {
+          const summary = epRow.summary_json ? JSON.parse(epRow.summary_json) : {};
+          const prov = epRow.provenance_json ? JSON.parse(epRow.provenance_json) : {};
+          endpointAssessment = {
+            ...epRow,
+            usb_result: summary.usb_result,
+            category_summaries: summary.category_summaries,
+            evidence_text: summary.evidence_text,
+            provenance: prov
+          };
+        }
+      } catch (epErr) {
+        console.warn('[AuditReport] Could not fetch endpoint assessment:', epErr);
+      }
+
       const reportMeta = {
         report_id: registered.report_id,
         scan_id: registered.scan_id,
@@ -1910,7 +1963,8 @@ export function createApiRouter(customDb?: any) {
         engine_version: registered.engine_version,
         checklist_version: registered.checklist_version,
         generated_at: registered.generated_at,
-        report_hash: registered.report_hash
+        report_hash: registered.report_hash,
+        endpoint_assessment: endpointAssessment
       };
 
       const format = req.params.format.toLowerCase();
