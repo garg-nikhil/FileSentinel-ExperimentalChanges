@@ -829,56 +829,6 @@ export const ScanView: React.FC<ScanViewProps> = ({
         </div>
       </div>
 
-      {/* Interrupted & Resumable Scans Panel */}
-      {resumableScans.length > 0 && (
-        <div className="bg-slate-900 border border-amber-500/30 rounded-xl p-6 space-y-4 shadow-lg shadow-amber-950/10">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <RotateCcw className="w-5 h-5 text-amber-400" />
-              <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider">
-                Interrupted / Resumable Scan Jobs ({resumableScans.length})
-              </h3>
-            </div>
-            <span className="text-xs text-amber-400/80 font-mono">
-              Database persistence enables zero-loss restart from last saved file
-            </span>
-          </div>
-
-          <div className="space-y-3">
-            {resumableScans.map(s => {
-              const pct = s.total_files > 0 ? Math.round((s.processed_files / s.total_files) * 100) : 0;
-              return (
-                <div key={s.scan_id} className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="space-y-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs text-emerald-400 font-bold">{s.scan_id}</span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
-                        s.status === 'PAUSED' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' : 'bg-slate-800 text-slate-300 border-slate-700'
-                      }`}>
-                        {s.status}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400 font-mono truncate">{s.root_path}</p>
-                    <p className="text-[11px] text-slate-500 font-mono">
-                      Progress: {s.processed_files} / {s.total_files} files ({pct}%) • Started: {new Date(s.start_time).toLocaleString()}
-                    </p>
-                  </div>
-
-                  <button
-                    onClick={() => handleResumeScan(s.scan_id)}
-                    disabled={isScanning || isResuming}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs px-5 py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-sm disabled:opacity-50 whitespace-nowrap self-start md:self-center"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isResuming ? 'animate-spin' : ''}`} />
-                    {isResuming ? 'Resuming...' : 'Resume Scan Job'}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* Real-time Scan Progress Section */}
       {activeScan && (
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
@@ -1228,6 +1178,56 @@ export const ScanView: React.FC<ScanViewProps> = ({
                 </table>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Interrupted & Resumable Scans Panel */}
+      {resumableScans.length > 0 && (
+        <div className="bg-slate-900 border border-amber-500/30 rounded-xl p-6 space-y-4 shadow-lg shadow-amber-950/10">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <RotateCcw className="w-5 h-5 text-amber-400" />
+              <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider">
+                Interrupted / Resumable Scan Jobs ({resumableScans.length})
+              </h3>
+            </div>
+            <span className="text-xs text-amber-400/80 font-mono">
+              Database persistence enables zero-loss restart from last saved file
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {resumableScans.map(s => {
+              const pct = s.total_files > 0 ? Math.round((s.processed_files / s.total_files) * 100) : 0;
+              return (
+                <div key={s.scan_id} className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs text-emerald-400 font-bold">{s.scan_id}</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                        s.status === 'PAUSED' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' : 'bg-slate-800 text-slate-300 border-slate-700'
+                      }`}>
+                        {s.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 font-mono truncate">{s.root_path}</p>
+                    <p className="text-[11px] text-slate-500 font-mono">
+                      Progress: {s.processed_files} / {s.total_files} files ({pct}%) • Started: {new Date(s.start_time).toLocaleString()}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => handleResumeScan(s.scan_id)}
+                    disabled={isScanning || isResuming}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs px-5 py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-sm disabled:opacity-50 whitespace-nowrap self-start md:self-center"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isResuming ? 'animate-spin' : ''}`} />
+                    {isResuming ? 'Resuming...' : 'Resume Scan Job'}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
