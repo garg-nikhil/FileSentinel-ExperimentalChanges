@@ -124,8 +124,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Facebook',
     primary_domain: 'facebook.com',
     probe_url: 'https://www.facebook.com',
-    expected_identifiers: ['facebook', 'fb', 'meta'],
-    allowed_domains: ['facebook.com', 'fb.com', 'meta.com']
+    expected_identifiers: ['facebook', 'fb', 'meta', 'fbcdn'],
+    allowed_domains: ['facebook.com', 'fb.com', 'meta.com', 'fbcdn.net']
   },
   {
     id: 'soc-ig',
@@ -133,8 +133,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Instagram',
     primary_domain: 'instagram.com',
     probe_url: 'https://www.instagram.com',
-    expected_identifiers: ['instagram'],
-    allowed_domains: ['instagram.com', 'cdninstagram.com']
+    expected_identifiers: ['instagram', 'cdninstagram', 'meta', 'facebook'],
+    allowed_domains: ['instagram.com', 'cdninstagram.com', 'facebook.com', 'fb.com', 'meta.com']
   },
   {
     id: 'soc-x',
@@ -142,8 +142,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'X',
     primary_domain: 'x.com',
     probe_url: 'https://x.com',
-    expected_identifiers: ['x.com', 'twitter'],
-    allowed_domains: ['x.com', 'twitter.com', 'twimg.com']
+    expected_identifiers: ['x.com', 'twitter', 'twimg'],
+    allowed_domains: ['x.com', 'twitter.com', 'twimg.com', 't.co']
   },
   {
     id: 'soc-li',
@@ -151,7 +151,7 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'LinkedIn',
     primary_domain: 'linkedin.com',
     probe_url: 'https://www.linkedin.com',
-    expected_identifiers: ['linkedin'],
+    expected_identifiers: ['linkedin', 'licdn'],
     allowed_domains: ['linkedin.com', 'licdn.com']
   },
   {
@@ -160,8 +160,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Reddit',
     primary_domain: 'reddit.com',
     probe_url: 'https://www.reddit.com',
-    expected_identifiers: ['reddit'],
-    allowed_domains: ['reddit.com', 'redd.it']
+    expected_identifiers: ['reddit', 'redditmedia', 'redd.it'],
+    allowed_domains: ['reddit.com', 'redd.it', 'redditmedia.com']
   },
   {
     id: 'soc-tt',
@@ -169,8 +169,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'TikTok',
     primary_domain: 'tiktok.com',
     probe_url: 'https://www.tiktok.com',
-    expected_identifiers: ['tiktok'],
-    allowed_domains: ['tiktok.com', 'tiktokcdn.com']
+    expected_identifiers: ['tiktok', 'tiktokcdn', 'bytedance'],
+    allowed_domains: ['tiktok.com', 'tiktokcdn.com', 'bytedance.com', 'tiktokv.com', 'byteoversea.com']
   },
 
   // --- PERSONAL EMAIL ---
@@ -180,8 +180,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Gmail',
     primary_domain: 'mail.google.com',
     probe_url: 'https://mail.google.com',
-    expected_identifiers: ['google', 'gmail', 'accounts.google'],
-    allowed_domains: ['google.com', 'googleusercontent.com', 'gstatic.com']
+    expected_identifiers: ['google', 'gmail', 'accounts.google', 'service=mail'],
+    allowed_domains: ['google.com', 'googleusercontent.com', 'gstatic.com', 'google.co.in']
   },
   {
     id: 'eml-yh',
@@ -189,7 +189,7 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Yahoo Mail',
     primary_domain: 'mail.yahoo.com',
     probe_url: 'https://mail.yahoo.com',
-    expected_identifiers: ['yahoo', 'login.yahoo'],
+    expected_identifiers: ['yahoo', 'login.yahoo', 'yimg'],
     allowed_domains: ['yahoo.com', 'yimg.com']
   },
   {
@@ -207,7 +207,7 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Proton Mail',
     primary_domain: 'mail.proton.me',
     probe_url: 'https://mail.proton.me',
-    expected_identifiers: ['proton', 'protonmail'],
+    expected_identifiers: ['proton', 'protonmail', 'proton.me'],
     allowed_domains: ['proton.me', 'protonmail.com']
   },
   {
@@ -217,7 +217,7 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     primary_domain: 'www.icloud.com',
     probe_url: 'https://www.icloud.com/mail',
     expected_identifiers: ['icloud', 'apple'],
-    allowed_domains: ['icloud.com', 'apple.com']
+    allowed_domains: ['icloud.com', 'apple.com', 'apple-cloudkit.com']
   },
 
   // --- MESSAGING ---
@@ -227,8 +227,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'WhatsApp Web',
     primary_domain: 'web.whatsapp.com',
     probe_url: 'https://web.whatsapp.com',
-    expected_identifiers: ['whatsapp'],
-    allowed_domains: ['whatsapp.com', 'whatsapp.net']
+    expected_identifiers: ['whatsapp', 'meta', 'fbcdn'],
+    allowed_domains: ['whatsapp.com', 'whatsapp.net', 'fbcdn.net']
   },
   {
     id: 'msg-tg',
@@ -236,7 +236,7 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Telegram Web',
     primary_domain: 'web.telegram.org',
     probe_url: 'https://web.telegram.org',
-    expected_identifiers: ['telegram'],
+    expected_identifiers: ['telegram', 't.me'],
     allowed_domains: ['telegram.org', 't.me']
   },
   {
@@ -245,8 +245,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Messenger',
     primary_domain: 'www.messenger.com',
     probe_url: 'https://www.messenger.com',
-    expected_identifiers: ['messenger', 'facebook', 'meta'],
-    allowed_domains: ['messenger.com', 'facebook.com', 'fb.com', 'meta.com']
+    expected_identifiers: ['messenger', 'facebook', 'meta', 'msgr', 'fbcdn'],
+    allowed_domains: ['messenger.com', 'facebook.com', 'fb.com', 'meta.com', 'fbcdn.net']
   },
   {
     id: 'msg-dc',
@@ -254,7 +254,7 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Discord',
     primary_domain: 'discord.com',
     probe_url: 'https://discord.com',
-    expected_identifiers: ['discord'],
+    expected_identifiers: ['discord', 'discordapp'],
     allowed_domains: ['discord.com', 'discord.gg', 'discordapp.com']
   },
   {
@@ -263,7 +263,7 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Signal',
     primary_domain: 'signal.org',
     probe_url: 'https://signal.org',
-    expected_identifiers: ['signal'],
+    expected_identifiers: ['signal', 'whispersystems'],
     allowed_domains: ['signal.org']
   },
 
@@ -274,8 +274,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Google Drive',
     primary_domain: 'drive.google.com',
     probe_url: 'https://drive.google.com',
-    expected_identifiers: ['google', 'drive', 'accounts.google'],
-    allowed_domains: ['google.com', 'googleusercontent.com', 'gstatic.com']
+    expected_identifiers: ['google', 'drive', 'accounts.google', 'service=wise'],
+    allowed_domains: ['google.com', 'googleusercontent.com', 'gstatic.com', 'google.co.in']
   },
   {
     id: 'cld-db',
@@ -283,8 +283,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Dropbox',
     primary_domain: 'www.dropbox.com',
     probe_url: 'https://www.dropbox.com',
-    expected_identifiers: ['dropbox'],
-    allowed_domains: ['dropbox.com', 'dropboxstatic.com']
+    expected_identifiers: ['dropbox', 'dropboxstatic'],
+    allowed_domains: ['dropbox.com', 'dropboxstatic.com', 'dropbox-dns.com', 'db.tt']
   },
   {
     id: 'cld-od',
@@ -292,8 +292,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'OneDrive',
     primary_domain: 'onedrive.live.com',
     probe_url: 'https://onedrive.live.com',
-    expected_identifiers: ['onedrive', 'live.com', 'microsoft', 'sharepoint'],
-    allowed_domains: ['live.com', 'microsoft.com', 'office.com', 'sharepoint.com', 'microsoftonline.com']
+    expected_identifiers: ['onedrive', 'live.com', 'microsoft', 'sharepoint', '1drv', 'login', 'office', 'live'],
+    allowed_domains: ['live.com', 'microsoft.com', 'office.com', 'sharepoint.com', 'microsoftonline.com', 'onedrive.com', '1drv.ms', 'live.net', 'azureedge.net']
   },
   {
     id: 'cld-bx',
@@ -301,17 +301,17 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Box',
     primary_domain: 'www.box.com',
     probe_url: 'https://www.box.com',
-    expected_identifiers: ['box.com', 'box'],
-    allowed_domains: ['box.com', 'boxcdn.net']
+    expected_identifiers: ['box.com', 'box', 'boxcdn'],
+    allowed_domains: ['box.com', 'boxcdn.net', 'account.box.com']
   },
   {
     id: 'cld-ic',
     category: 'CLOUD_STORAGE',
     service_name: 'iCloud Drive',
     primary_domain: 'www.icloud.com',
-    probe_url: 'https://www.icloud.com/iclouddrive',
+    probe_url: 'https://www.icloud.com',
     expected_identifiers: ['icloud', 'apple'],
-    allowed_domains: ['icloud.com', 'apple.com']
+    allowed_domains: ['icloud.com', 'apple.com', 'apple-cloudkit.com']
   }
 ];
 
@@ -521,16 +521,31 @@ export class WebAccessDetector {
         };
       }
 
-      // Connection refused / reset / timeout
-      if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|timeout/i.test(errMsg)) {
+      // Connection refused -> Blocked by local/perimeter firewall
+      if (/ECONNREFUSED/i.test(errMsg)) {
         return {
           category: target.category,
           service: target.service_name,
           target_domain: target.primary_domain,
           status: 'BLOCKED',
+          confidence: 'HIGH',
+          detectionMethod: 'HTTPS_PROBE',
+          reason: `Connection refused: ${errMsg}`,
+          responseTimeMs: elapsed,
+          timestamp
+        };
+      }
+
+      // Connection timeout / network unreachable
+      if (/ETIMEDOUT|timeout/i.test(errMsg)) {
+        return {
+          category: target.category,
+          service: target.service_name,
+          target_domain: target.primary_domain,
+          status: 'UNREACHABLE',
           confidence: 'MEDIUM',
           detectionMethod: 'HTTPS_PROBE',
-          reason: `Connection rejected or timed out: ${errMsg}`,
+          reason: `Connection timed out: ${errMsg}`,
           responseTimeMs: elapsed,
           timestamp
         };
@@ -628,9 +643,14 @@ export class WebAccessDetector {
           path: reqPath,
           method: 'GET',
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 FileSentinel-Probe/1.0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
             'Connection': 'close'
           },
           timeout: this.requestTimeoutMs
@@ -921,9 +941,16 @@ export class WebAccessDetector {
 
     // 5. Successful Status (HTTP 200..399 or 400/401/405 with target signatures)
     if ((statusCode >= 200 && statusCode < 400) || statusCode === 400 || statusCode === 401 || statusCode === 405) {
-      // Deterministic validation: must match expected target service signatures
-      const matchesExpectedIdentifier = target.expected_identifiers.length > 0 && target.expected_identifiers.some(ident => {
-        const cleanIdent = ident.toLowerCase().trim();
+      // Deterministic validation: check explicit identifiers and target domain tokens in body/headers
+      const allTokens = [
+        ...target.expected_identifiers,
+        target.primary_domain,
+        ...(target.allowed_domains || [])
+      ];
+
+      const matchesExpectedIdentifier = allTokens.some(ident => {
+        const cleanIdent = ident.toLowerCase().trim().replace(/^www\./, '');
+        if (cleanIdent.length < 3) return false;
         return lowerBody.includes(cleanIdent) || allHeaders.includes(cleanIdent);
       });
 
