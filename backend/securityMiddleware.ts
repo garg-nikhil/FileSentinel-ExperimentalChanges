@@ -2,28 +2,35 @@ import { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 
 // --- SECURITY HEADERS MIDDLEWARE ---
-// Security Hardening #8: CSP hardened — removed 'unsafe-inline' from scriptSrc for XSS protection
-export const securityHeaders = helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      connectSrc: ["'self'", "ws://localhost:3000", "ws://127.0.0.1:3000", "http://localhost:3000", "http://127.0.0.1:3000", "ws:", "wss:"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      fontSrc: ["'self'", "data:", "https:"],
-      imgSrc: ["'self'", "data:", "blob:"],
-      frameAncestors: ["'none'"],
-      baseUri: ["'self'"],
-      formAction: ["'self'"],
-      upgradeInsecureRequests: null
-    }
-  },
-  crossOriginOpenerPolicy: { policy: 'same-origin' },
-  crossOriginResourcePolicy: { policy: 'same-origin' },
-  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
-  frameguard: { action: 'sameorigin' },
-  hsts: false
-});
+// In production builds, rigid CSP ('self' only) is enforced. In dev mode, Vite HMR and React preamble scripts are accommodated.
+export function securityHeaders(req: Request, res: Response, next: NextFunction) {
+  const isProd = process.env.NODE_ENV === 'production';
+  return helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        connectSrc: isProd
+          ? ["'self'", "ws://localhost:3000", "ws://127.0.0.1:3000", "http://localhost:3000", "http://127.0.0.1:3000"]
+          : ["'self'", "ws://localhost:*", "ws://127.0.0.1:*", "http://localhost:*", "http://127.0.0.1:*", "ws:", "wss:"],
+        scriptSrc: isProd
+          ? ["'self'"]
+          : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        fontSrc: ["'self'", "data:", "https:"],
+        imgSrc: ["'self'", "data:", "blob:"],
+        frameAncestors: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+        upgradeInsecureRequests: null
+      }
+    },
+    crossOriginOpenerPolicy: { policy: 'same-origin' },
+    crossOriginResourcePolicy: { policy: 'same-origin' },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    frameguard: { action: 'sameorigin' },
+    hsts: false
+  })(req, res, next);
+}
 
 // --- CORS MIDDLEWARE ---
 export function corsMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -40,7 +47,7 @@ export function corsMiddleware(req: Request, res: Response, next: NextFunction) 
   if (origin && allowedOrigins.has(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-FS-IPC-Secret, X-CSRF-Token, X-Requested-With');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
 
@@ -168,6 +175,25 @@ export function rateLimiter(options: { windowMs: number; max: number; keyGenerat
     record.timestamps.push(now);
     next();
   };
+}
+
+const rateLimiterCleanupTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of rateLimits) {
+    record.timestamps = record.timestamps.filter(t => now - t < 120000);
+    if (record.timestamps.length === 0) {
+      rateLimits.delete(key);
+    }
+  }
+  // Also clean up stale login throttle entries
+  for (const [key, record] of loginThrottleMap) {
+    if (now - record.lastAttempt > 30 * 60 * 1000 && record.lockoutUntil < now) {
+      loginThrottleMap.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
+if (rateLimiterCleanupTimer && typeof rateLimiterCleanupTimer.unref === 'function') {
+  rateLimiterCleanupTimer.unref();
 }
 
 // --- CSRF PROTECTION (Custom Header & Origin Validation) ---

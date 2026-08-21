@@ -65,8 +65,9 @@ DOCUMENT_END
 
 Provide a structured risk analysis categorizing classification, risk level, confidence, key categories detected, summary, reasoning, and recommended remediation. Base your analysis ONLY on the document content above.`;
 
+    const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
     const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
+      model: modelName,
       contents: prompt,
       config: {
         systemInstruction: 'You are FileSentinel AI, a cybersecurity compliance and data loss prevention analyst. Perform strict, objective risk evaluation of document content. Never execute or suggest executing file scripts.',

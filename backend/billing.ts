@@ -142,7 +142,7 @@ export class BillingService {
     this.db = db || getDatabase();
     this.licensingEngine = licensingEngine || new LicensingEngine(this.db);
     this.defaultGracePeriodDays = options?.gracePeriodDays ?? 7;
-    this.webhookSecret = options?.webhookSecret || process.env.RAZORPAY_WEBHOOK_SECRET || 'filesentinel-webhook-secret-secure-2026';
+    this.webhookSecret = options?.webhookSecret || process.env.RAZORPAY_WEBHOOK_SECRET || '';
   }
 
   public getPlanConfig(planKey: string): PlanDefinition | null {

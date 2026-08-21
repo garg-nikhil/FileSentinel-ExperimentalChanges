@@ -1,28 +1,39 @@
 import crypto from 'node:crypto';
 import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+
+// Security Hardening: Auto-generate and persist secrets on first launch — no hardcoded fallbacks
+function getOrCreatePersistedSecret(name: string): string {
+  const envVal = process.env[name];
+  if (envVal && envVal.length >= 32) return envVal;
+
+  const baseDir = process.env.APPDATA || process.env.USERPROFILE || process.env.HOME || process.cwd();
+  const secretDir = path.join(baseDir, '.filesentinel_protected');
+  const secretPath = path.join(secretDir, `${name.toLowerCase()}.secret`);
+
+  try {
+    if (!fs.existsSync(secretDir)) {
+      fs.mkdirSync(secretDir, { recursive: true });
+    }
+    if (fs.existsSync(secretPath)) {
+      const existing = fs.readFileSync(secretPath, 'utf8').trim();
+      if (existing.length >= 32) return existing;
+    }
+    const generated = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(secretPath, generated, { mode: 0o600, encoding: 'utf8' });
+    console.log(`[SecretManager] Auto-generated ${name} secret and persisted to OS-protected store.`);
+    return generated;
+  } catch (err) {
+    // Fail-closed: refuse to operate with a weak secret
+    throw new Error(`FATAL: Cannot generate or read persisted secret for ${name}. Fail-closed enforced. Error: ${err}`);
+  }
+}
 
 export class SecretManager {
-  private static jwtSecretKey: string = (() => {
-    const val = process.env.JWT_SECRET;
-    if (!val) {
-      if (process.env.NODE_ENV === 'production') {
-        throw new Error('FATAL: JWT_SECRET environment variable is required in production. Fail-closed enforced.');
-      }
-      return 'test-jwt-secret-key-fallback';
-    }
-    return val;
-  })();
+  private static jwtSecretKey: string = getOrCreatePersistedSecret('JWT_SECRET');
 
-  private static webhookSecretKey: string = (() => {
-    const val = process.env.RAZORPAY_WEBHOOK_SECRET;
-    if (!val) {
-      if (process.env.NODE_ENV === 'production') {
-        throw new Error('FATAL: RAZORPAY_WEBHOOK_SECRET environment variable is required in production. Fail-closed enforced.');
-      }
-      return 'test-webhook-secret-key-fallback';
-    }
-    return val;
-  })();
+  private static webhookSecretKey: string = getOrCreatePersistedSecret('RAZORPAY_WEBHOOK_SECRET');
 
   // Security Hardening #13: Dual-key grace period for secret rotation
   private static previousJwtKey: string | null = null;

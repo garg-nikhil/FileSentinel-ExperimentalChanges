@@ -148,7 +148,10 @@ async function runTestSuite() {
   assert(fs.existsSync(tempTarget) === false, 'Local file deleted ONLY after verified upload');
   console.log(' ✓ Strict cloud upload & verified local deletion contract verified.\n');
 
-  if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
+  try {
+    if (typeof (db as any).close === 'function') (db as any).close();
+    if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
+  } catch {}
 
   console.log('====================================================');
   console.log('   ALL 15 EXTRACTOR & SCANNER TESTS PASSED (100%)');

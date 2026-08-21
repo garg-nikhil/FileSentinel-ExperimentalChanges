@@ -4,6 +4,7 @@ import express from 'express';
 import request from 'supertest';
 import { getDatabase } from '../backend/db.js';
 import { createApiRouter } from '../backend/routes.js';
+import { hashSessionToken } from '../backend/auth.js';
 import crypto from 'node:crypto';
 
 describe('FRONTEND AUTHENTICATION BOOTSTRAP REGRESSION TEST SUITE', () => {
@@ -31,15 +32,15 @@ describe('FRONTEND AUTHENTICATION BOOTSTRAP REGRESSION TEST SUITE', () => {
     // Issue valid session token
     validToken = 'tok-valid-' + crypto.randomBytes(16).toString('hex');
     const validExpires = new Date(Date.now() + 3600 * 1000).toISOString();
-    db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-      validToken, testUserId, testOrgId, 'dev-1', validExpires, now
+    db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+      hashSessionToken(validToken), testUserId, testOrgId, 'dev-1', validExpires, now
     );
 
     // Issue expired session token
     expiredToken = 'tok-expired-' + crypto.randomBytes(16).toString('hex');
     const expiredTime = new Date(Date.now() - 3600 * 1000).toISOString();
-    db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-      expiredToken, testUserId, testOrgId, 'dev-1', expiredTime, now
+    db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+      hashSessionToken(expiredToken), testUserId, testOrgId, 'dev-1', expiredTime, now
     );
   });
 

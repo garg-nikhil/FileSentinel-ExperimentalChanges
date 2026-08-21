@@ -34,13 +34,30 @@ export function getOrGenerateOSProtectedKey(): string {
   }
 }
 
-export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync {
-  if (dbPath === './filesentinel.db' && defaultDbInstance) {
+// Database path resolver: checks env var, local workspace DB, then OS AppData
+function getDefaultDbPath(): string {
+  if (process.env.FILE_SENTINEL_DB_PATH) {
+    return process.env.FILE_SENTINEL_DB_PATH;
+  }
+  if (fs.existsSync('./filesentinel.db')) {
+    return './filesentinel.db';
+  }
+  const baseDir = process.env.APPDATA || process.env.USERPROFILE || process.env.HOME || process.cwd();
+  const appDir = path.join(baseDir, 'FileSentinel');
+  if (!fs.existsSync(appDir)) {
+    fs.mkdirSync(appDir, { recursive: true });
+  }
+  return path.join(appDir, 'filesentinel.db');
+}
+
+export function getDatabase(dbPath?: string): DatabaseSync {
+  const resolvedPath = dbPath || getDefaultDbPath();
+  if (resolvedPath === getDefaultDbPath() && defaultDbInstance) {
     return defaultDbInstance;
   }
 
-  const dbDir = path.dirname(dbPath);
-  if (dbPath !== ':memory:' && !fs.existsSync(dbDir)) {
+  const dbDir = path.dirname(resolvedPath);
+  if (resolvedPath !== ':memory:' && !fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
@@ -266,6 +283,12 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         involved_evidence_json TEXT,
         conflicting_attributes_json TEXT,
         created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS organizations (
@@ -858,24 +881,24 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
 
   let instance: DatabaseSync;
   try {
-    instance = initDb(dbPath);
+    instance = initDb(resolvedPath);
   } catch (err: any) {
     if (err?.code === 'ERR_SQLITE_ERROR' || err?.message?.includes('malformed')) {
       console.warn(`[SQLite] Database corrupt (${err.message}). Removing and recreating fresh database.`);
       try {
-        if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
-        if (fs.existsSync(`${dbPath}-journal`)) fs.unlinkSync(`${dbPath}-journal`);
-        if (fs.existsSync(`${dbPath}-wal`)) fs.unlinkSync(`${dbPath}-wal`);
+        if (fs.existsSync(resolvedPath)) fs.unlinkSync(resolvedPath);
+        if (fs.existsSync(`${resolvedPath}-journal`)) fs.unlinkSync(`${resolvedPath}-journal`);
+        if (fs.existsSync(`${resolvedPath}-wal`)) fs.unlinkSync(`${resolvedPath}-wal`);
       } catch (unlinkErr) {
         console.error('[SQLite] Unlink error:', unlinkErr);
       }
-      instance = initDb(dbPath);
+      instance = initDb(resolvedPath);
     } else {
       throw err;
     }
   }
 
-  if (dbPath === './filesentinel.db') {
+  if (resolvedPath === getDefaultDbPath()) {
     defaultDbInstance = instance;
   }
 

@@ -177,7 +177,8 @@ export function authenticateRequest(req: Request, res: Response, next: NextFunct
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
   const deviceIdHeader = req.headers['x-device-id'] as string | undefined;
 
-  const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' || process.env.NODE_ENV !== 'production';
+  // Security Hardening: Dev mode requires EXPLICIT opt-in — never active in production/packaged exe
+  const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
   const activeDb = (req.app?.locals?.db) || getDatabase();
 
   const ipcSecret = process.env.FILE_SENTINEL_IPC_SECRET;

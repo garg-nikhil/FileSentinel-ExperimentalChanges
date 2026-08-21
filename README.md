@@ -71,17 +71,20 @@ The application runs locally on **`http://localhost:3000`**.
 
 ## 5. REST API Endpoints
 
-- `GET /api/health` — Engine health check and SQLite database status.
+- `GET /api/health` — Engine health check.
+- `POST /api/auth/login` — Authenticate and obtain session token (Rate-limited, progressive lockout).
 - `GET /api/dashboard/stats` — High-level telemetry, risk score breakdown, and recent findings.
 - `POST /api/scans` — Trigger recursive folder discovery and static scan.
 - `GET /api/scans/:id/progress` — Real-time scan telemetry.
 - `GET /api/files` — List scanned files with risk scores and classification tags.
 - `GET /api/files/:id` — View full file details, SHA-256, findings, and extracted preview.
-- `POST /api/files/:id/analyze-ai` — Trigger Gemini 3.6 Flash semantic analysis.
+- `POST /api/files/:id/analyze-ai` — Trigger Gemini semantic analysis (rate-limited, sanitized input).
 - `GET /api/findings` — Global list of normalized DLP rule triggers.
-- `GET /api/rules` — Retrieve configurable security rules.
+- `GET /api/rules` — Retrieve configurable security rules (Authenticated).
+- `POST /api/rules` — Create custom security rule with ReDoS pattern validation.
 - `PUT /api/rules/:id/toggle` — Enable/disable individual rules.
-- `POST /api/quarantine/:id/upload-and-remove` — Verified cloud quarantine and local deletion.
+- `GET /api/settings` — Read application settings.
+- `POST /api/settings` — Update application settings (Whitelisted keys, persisted to DB).
 
 ---
 

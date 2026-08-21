@@ -33,17 +33,33 @@ import { ScanSchedulerService } from './scanScheduler.js';
 import { ClockMonitorService } from './licensing/clockMonitor.js';
 import { ProtectedLicenseStore } from './licensing/protectedLicenseStore.js';
 
+// Security Hardening: Strict uploadId and path validation to prevent path traversal
+const UPLOAD_ID_REGEX = /^[a-zA-Z0-9_-]{1,64}$/;
+function sanitizeRelativePath(rawPath: string): string {
+  const segments = rawPath.split(/[\/\\]/).filter(s => s && s !== '.' && s !== '..');
+  return segments.join(path.sep) || '.';
+}
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    // Preserve relative directory structure if passed via originalname
-    const relativePath = path.dirname(file.originalname);
     const uploadId = req.body.uploadId || 'default';
-    const targetDir = path.join('backend', 'uploads', uploadId, relativePath);
+    if (!UPLOAD_ID_REGEX.test(uploadId)) {
+      return cb(new Error('Invalid uploadId format'), '');
+    }
+    const relativePath = sanitizeRelativePath(path.dirname(file.originalname));
+    const uploadsBase = path.resolve('backend', 'uploads');
+    const targetDir = path.resolve(uploadsBase, uploadId, relativePath);
+    // Containment check: ensure targetDir is inside uploadsBase
+    if (!targetDir.startsWith(uploadsBase)) {
+      return cb(new Error('Path traversal detected in upload destination'), '');
+    }
     fs.mkdirSync(targetDir, { recursive: true });
     cb(null, targetDir);
   },
   filename: function (req, file, cb) {
-    cb(null, path.basename(file.originalname));
+    // Use only the basename — strip any directory components
+    const safeName = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, safeName);
   }
 });
 const ALLOWED_SCAN_EXTENSIONS = [
@@ -116,6 +132,17 @@ export function createApiRouter(customDb?: any) {
     }
   };
 
+  // Security Hardening R-3: Load persisted settings from database if available
+  try {
+    const dbSettingsRow = db.prepare('SELECT value_json FROM app_settings WHERE key = ?').get('global_settings') as { value_json: string } | undefined;
+    if (dbSettingsRow && dbSettingsRow.value_json) {
+      const parsed = JSON.parse(dbSettingsRow.value_json);
+      currentSettings = { ...currentSettings, ...parsed };
+    }
+  } catch (e) {
+    console.warn('[Settings] Failed to load persisted settings from DB, using defaults:', e);
+  }
+
   // Start background recurring scan scheduler
   scanSchedulerService.startSchedulerLoop(() => currentSettings, updatedSettings => { currentSettings = updatedSettings; });
 
@@ -147,7 +174,8 @@ export function createApiRouter(customDb?: any) {
   // --- AUTHENTICATION & IDENTITY ---
   router.post('/auth/login', (req: Request, res: Response) => {
     const { username, password, device_id } = req.body;
-    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || req.ip || 'unknown';
+    // Security Hardening H-1: Use only socket address — X-Forwarded-For is untrusted (trust proxy = false)
+    const clientIp = req.socket.remoteAddress || req.ip || 'unknown';
     const throttleKey = `${clientIp}:${username || 'anonymous'}`;
 
     // 1. Progressive throttling check
@@ -200,10 +228,21 @@ export function createApiRouter(customDb?: any) {
     recordSuccessfulLogin(throttleKey);
 
     const token = 'tok-' + crypto.randomBytes(32).toString('hex');
-    const refreshToken = 'rtk-' + crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
-    const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
     const now = new Date().toISOString();
+
+    // Security Hardening M-2: Prune expired sessions & enforce max concurrent active sessions per user
+    try {
+      db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
+      const MAX_ACTIVE_SESSIONS = 5;
+      const activeSessions = db.prepare('SELECT rowid FROM sessions WHERE user_id = ? ORDER BY created_at ASC').all(user.user_id) as any[];
+      if (activeSessions.length >= MAX_ACTIVE_SESSIONS) {
+        const toDeleteCount = activeSessions.length - MAX_ACTIVE_SESSIONS + 1;
+        for (let i = 0; i < toDeleteCount; i++) {
+          db.prepare('DELETE FROM sessions WHERE rowid = ?').run(activeSessions[i].rowid);
+        }
+      }
+    } catch {}
 
     // Security Hardening #4: Store hashed session token, not raw token
     db.prepare(`
@@ -221,9 +260,7 @@ export function createApiRouter(customDb?: any) {
     res.json({
       success: true,
       token,
-      refresh_token: refreshToken,
       expires_at: expiresAt,
-      refresh_expires_at: refreshExpiresAt,
       user: {
         user_id: user.user_id,
         org_id: user.org_id,
@@ -346,6 +383,13 @@ export function createApiRouter(customDb?: any) {
     const { username, password, role } = req.body;
     if (!username || !password || !role) {
       return res.status(400).json({ error: 'Username, password, and role are required' });
+    }
+    // Security Hardening H-5: Password complexity validation
+    if (typeof password !== 'string' || password.length < 12) {
+      return res.status(400).json({ error: 'Password must be at least 12 characters long' });
+    }
+    if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) {
+      return res.status(400).json({ error: 'Password must contain uppercase, lowercase, and numeric characters' });
     }
     const validRoles = ['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER'];
     if (!validRoles.includes(role)) {
@@ -582,13 +626,11 @@ export function createApiRouter(customDb?: any) {
   });
 
   // --- HEALTH & METRICS ---
+  // Security Hardening H-2: Health endpoint returns minimal info only
   router.get('/health', (req: Request, res: Response) => {
     res.json({
       status: 'ok',
-      service: 'FileSentinel Engine',
-      version: '1.0.0',
-      timestamp: new Date().toISOString(),
-      database: 'connected'
+      timestamp: new Date().toISOString()
     });
   });
 
@@ -600,9 +642,32 @@ export function createApiRouter(customDb?: any) {
   });
 
   router.post('/settings', authenticateRequest, requireRole(['ORG_ADMIN']), (req: Request, res: Response) => {
-    currentSettings = { ...currentSettings, ...req.body };
+    // Security Hardening H-6: Whitelist allowed settings keys to prevent prototype pollution
+    const ALLOWED_SETTINGS_KEYS = [
+      'maxFileSizeMB', 'maxScanDepth', 'aiEnabled', 'aiPrivacyMode',
+      'cloudUploadEnabled', 'telemetryEnabled', 'crashReportingEnabled',
+      'debugFilenamesEnabled', 'redactSensitivePreview', 'cloudBucketName',
+      'quarantineLocalDir', 'theme', 'recurringScan'
+    ];
+    const sanitizedBody: Record<string, any> = {};
+    for (const key of ALLOWED_SETTINGS_KEYS) {
+      if (key in req.body) {
+        sanitizedBody[key] = req.body[key];
+      }
+    }
+    currentSettings = { ...currentSettings, ...sanitizedBody };
     if (currentSettings.recurringScan) {
       currentSettings.recurringScan.nextRunTime = scanSchedulerService.computeNextRunTime(currentSettings.recurringScan);
+    }
+    // Security Hardening R-3: Persist settings to database
+    try {
+      db.prepare(`
+        INSERT INTO app_settings (key, value_json, updated_at)
+        VALUES ('global_settings', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+      `).run(JSON.stringify(currentSettings), new Date().toISOString());
+    } catch (e) {
+      console.error('[Settings] Failed to persist settings to DB:', e);
     }
     logAuditEvent('UPDATE_SETTINGS', undefined, undefined, 'SUCCESS', 'App configuration updated');
     res.json(currentSettings);
@@ -638,7 +703,8 @@ export function createApiRouter(customDb?: any) {
   });
 
   // --- PRIVACY-FIRST DATA GOVERNANCE & TELEMETRY DEBUGGER ---
-  router.get('/privacy/governance', (req: Request, res: Response) => {
+  // Security Hardening H-2: Added authentication to governance endpoint
+  router.get('/privacy/governance', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     try {
       const manifest = privacyGovernanceService.getGovernanceManifest();
       res.json(manifest);
@@ -947,7 +1013,8 @@ export function createApiRouter(customDb?: any) {
     payload.device_id = payload.device_id || authDeviceId;
 
     try {
-      const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || req.ip;
+      // Security Hardening M-6: Use only socket address — X-Forwarded-For is untrusted
+      const clientIp = req.socket.remoteAddress || req.ip;
       const result = telemetryService.recordScanTelemetry(payload, clientIp);
       return res.json(result);
     } catch (err: any) {
@@ -1101,7 +1168,8 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.get('/billing/plans', (req: Request, res: Response) => {
+  // Security Hardening H-2: Added authentication to billing plans endpoint
+  router.get('/billing/plans', authenticateRequest, (req: Request, res: Response) => {
     try {
       const plans = billingService.getAllPlans();
       res.json(plans);
@@ -1367,7 +1435,8 @@ export function createApiRouter(customDb?: any) {
   });
 
   // --- RULES ---
-  router.get('/rules', (req: Request, res: Response) => {
+  // Security Hardening H-2: Added authentication — rule patterns are security-sensitive
+  router.get('/rules', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     const rows = db.prepare('SELECT * FROM rules ORDER BY category, id').all() as any[];
     const rules = rows.map(r => ({
       id: r.id,
@@ -1386,6 +1455,22 @@ export function createApiRouter(customDb?: any) {
   router.post('/rules', authenticateRequest, requireRole(['ORG_ADMIN']), (req: Request, res: Response) => {
     const { id, name, category, severity, enabled, pattern, description, recommendation } = req.body;
     const newId = id || `RULE-${crypto.randomUUID().substring(0, 8)}`;
+
+    // Security Hardening M-1: Validate regex pattern to prevent ReDoS
+    if (pattern) {
+      try {
+        new RegExp(pattern);
+        // Basic catastrophic backtracking detection: reject patterns with nested quantifiers
+        if (/((\\.|[^\\])+\+|\*|\{)\s*(\+|\*|\{)/.test(pattern) || /\(([^)]*\+|[^)]*\*)[^)]*\)\+/.test(pattern)) {
+          return res.status(400).json({ error: 'Rule pattern contains potentially dangerous nested quantifiers that could cause catastrophic backtracking' });
+        }
+        if (pattern.length > 500) {
+          return res.status(400).json({ error: 'Rule pattern exceeds maximum allowed length of 500 characters' });
+        }
+      } catch (e: any) {
+        return res.status(400).json({ error: `Invalid regex pattern: ${e.message}` });
+      }
+    }
 
     const stmt = db.prepare(`
       INSERT INTO rules (id, name, category, severity, enabled, pattern, description, recommendation, is_builtin)
@@ -1570,14 +1655,25 @@ export function createApiRouter(customDb?: any) {
           return res.status(400).json({ error: `None of the provided directory targets exist.` });
         }
 
-        // Collect file paths
+        // Security Hardening H-7: Apply BASE_ALLOWED_DIR containment to audit file collection
         const filePaths: string[] = [];
+        const baseAllowed = process.env.BASE_ALLOWED_DIR ? fs.realpathSync(process.env.BASE_ALLOWED_DIR) : null;
         function collectFiles(dir: string) {
-          const entries = fs.readdirSync(dir, { withFileTypes: true });
-          for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) collectFiles(fullPath);
-            else filePaths.push(fullPath);
+          try {
+            const realDir = fs.realpathSync(dir);
+            if (baseAllowed) {
+              const rel = path.relative(baseAllowed, realDir);
+              if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return;
+            }
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+              if (['.git', 'node_modules', 'dist', 'build'].includes(entry.name)) continue;
+              const fullPath = path.join(dir, entry.name);
+              if (entry.isDirectory()) collectFiles(fullPath);
+              else filePaths.push(fullPath);
+            }
+          } catch (e) {
+            // Skip inaccessible directories
           }
         }
         for (const root of validRoots) {
@@ -2814,7 +2910,8 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.post('/scan-jobs', authenticateRequest, (req: Request, res: Response) => {
+  // Security Hardening M-7: Added role enforcement to scan-job mutation endpoints
+  router.post('/scan-jobs', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), (req: Request, res: Response) => {
     try {
       const orgId = req.user!.orgId;
       const { endpointId, checklistId, sources } = req.body;
@@ -2851,7 +2948,7 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.post('/scan-jobs/:scanId/start', authenticateRequest, async (req: Request, res: Response) => {
+  router.post('/scan-jobs/:scanId/start', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), async (req: Request, res: Response) => {
     try {
       const orgId = req.user!.orgId;
       const { scanId } = req.params;
@@ -2892,7 +2989,7 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.post('/scan-jobs/:scanId/pause', authenticateRequest, (req: Request, res: Response) => {
+  router.post('/scan-jobs/:scanId/pause', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), (req: Request, res: Response) => {
     try {
       const orgId = req.user!.orgId;
       const { scanId } = req.params;
@@ -2904,7 +3001,7 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.post('/scan-jobs/:scanId/cancel', authenticateRequest, (req: Request, res: Response) => {
+  router.post('/scan-jobs/:scanId/cancel', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), (req: Request, res: Response) => {
     try {
       const orgId = req.user!.orgId;
       const { scanId } = req.params;
@@ -2957,7 +3054,8 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.post('/checklists/:id/enable', authenticateRequest, (req: Request, res: Response) => {
+  // Security Hardening M-8: Checklist enable/disable requires ORG_ADMIN
+  router.post('/checklists/:id/enable', authenticateRequest, requireRole(['ORG_ADMIN']), (req: Request, res: Response) => {
     try {
       const mgr = new ChecklistManager(db);
       const success = mgr.setEnabled(req.params.id, true);
@@ -2967,7 +3065,7 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.post('/checklists/:id/disable', authenticateRequest, (req: Request, res: Response) => {
+  router.post('/checklists/:id/disable', authenticateRequest, requireRole(['ORG_ADMIN']), (req: Request, res: Response) => {
     try {
       const mgr = new ChecklistManager(db);
       const success = mgr.setEnabled(req.params.id, false);
@@ -3191,7 +3289,12 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.post('/license/clock-monitor/simulate-rollback', authenticateRequest, (req: Request, res: Response) => {
+  // Security Hardening L-2: Simulation endpoint gated behind dev mode — must not ship in production
+  router.post('/license/clock-monitor/simulate-rollback', authenticateRequest, requireRole(['SYS_ADMIN']), (req: Request, res: Response) => {
+    const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
+    if (!isDevMode) {
+      return res.status(404).json({ error: 'Endpoint not available in production' });
+    }
     try {
       const reason = req.body.reason || 'Simulated clock rollback manual override.';
       clockMonitorService.triggerClockRollback(reason, (r) => {
