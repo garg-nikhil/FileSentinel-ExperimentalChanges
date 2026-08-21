@@ -4,7 +4,7 @@ import { api } from '../services/api';
 import { useToast } from '../context/ToastContext';
 import { 
   FolderSearch, Play, Pause, RefreshCw, CheckCircle2, AlertTriangle, 
-  ShieldCheck, UploadCloud, Folder, Trash2, CheckSquare, Square, 
+  ShieldCheck, UploadCloud, Folder, FolderPlus, Trash2, CheckSquare, Square, 
   FileText, Search, Clock, PauseCircle, AlertCircle, CheckCircle, FileCode,
   RotateCcw, Timer, Zap, Hourglass
 } from 'lucide-react';
@@ -26,6 +26,7 @@ interface UploadedFolder {
   progress: number;
   selected: boolean;
   errorMsg?: string;
+  rawFiles?: File[];
 }
 
 export const ScanView: React.FC<ScanViewProps> = ({
@@ -304,7 +305,8 @@ export const ScanView: React.FC<ScanViewProps> = ({
       fileCount: files.length,
       status: 'uploading',
       progress: 0,
-      selected: true
+      selected: true,
+      rawFiles: files
     };
 
     setUploadedFolders(prev => [...prev, newFolderItem]);
@@ -333,6 +335,56 @@ export const ScanView: React.FC<ScanViewProps> = ({
         status: 'error',
         errorMsg: err.message || 'Upload failed'
       } : f));
+    }
+  };
+
+  const handleRetryUpload = async (folderId: string) => {
+    const target = uploadedFolders.find(f => f.id === folderId);
+    if (!target || target.status !== 'error') return;
+
+    if (!target.rawFiles || target.rawFiles.length === 0) {
+      fileInputRef.current?.click();
+      return;
+    }
+
+    setUploadedFolders(prev => prev.map(f => f.id === folderId ? {
+      ...f,
+      status: 'uploading',
+      progress: 0,
+      errorMsg: undefined
+    } : f));
+
+    try {
+      const result = await api.uploadDirectory(target.rawFiles, (pct) => {
+        setUploadedFolders(prev => prev.map(f => f.id === folderId ? { ...f, progress: pct } : f));
+      });
+
+      setUploadedFolders(prev => prev.map(f => f.id === folderId ? {
+        ...f,
+        rootPath: result.rootPath,
+        fileCount: result.fileCount,
+        status: 'completed',
+        progress: 100,
+        folderName: result.folderName || target.folderName
+      } : f));
+
+      showToast({
+        title: 'FOLDER UPLOAD COMPLETED',
+        message: `Successfully uploaded ${result.fileCount} file(s) for ${target.folderName}`,
+        type: 'success'
+      });
+    } catch (err: any) {
+      setUploadedFolders(prev => prev.map(f => f.id === folderId ? {
+        ...f,
+        status: 'error',
+        errorMsg: err.message || 'Upload retry failed'
+      } : f));
+
+      showToast({
+        title: 'FOLDER UPLOAD FAILED',
+        message: err.message || 'Retry failed for folder upload',
+        type: 'violation'
+      });
     }
   };
 
@@ -494,6 +546,17 @@ export const ScanView: React.FC<ScanViewProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
+            {uploadedFolders.length > 0 && (
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isScanning}
+                className="bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 text-xs px-3.5 py-2.5 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-50"
+                title="Add more target folders to the scan batch"
+              >
+                <FolderPlus className="w-4 h-4 text-emerald-400" />
+                Add More Folders
+              </button>
+            )}
             <button 
               onClick={() => fileInputRef.current?.click()}
               disabled={isScanning}
@@ -548,7 +611,19 @@ export const ScanView: React.FC<ScanViewProps> = ({
                   {selectedCompletedCount === uploadedFolders.length ? 'Deselect All' : 'Select All'}
                 </button>
               </div>
-              <span>{selectedCompletedCount} of {uploadedFolders.length} folders selected for scan</span>
+              <div className="flex items-center gap-3">
+                <span>{selectedCompletedCount} of {uploadedFolders.length} folders selected for scan</span>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isScanning}
+                  className="text-xs text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 px-2.5 py-1 rounded-md border border-emerald-500/30 transition-colors disabled:opacity-50"
+                  title="Upload another folder to include in scan"
+                >
+                  <FolderPlus className="w-3.5 h-3.5" />
+                  <span>Add Folder</span>
+                </button>
+              </div>
             </div>
 
             <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
@@ -612,6 +687,18 @@ export const ScanView: React.FC<ScanViewProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+                    {folder.status === 'error' && (
+                      <button
+                        type="button"
+                        onClick={() => handleRetryUpload(folder.id)}
+                        disabled={isScanning}
+                        className="px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 hover:text-rose-200 border border-rose-500/30 text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-40"
+                        title="Retry failed folder upload"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Retry</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => removeFolder(folder.id)}
                       disabled={isScanning}
@@ -624,6 +711,17 @@ export const ScanView: React.FC<ScanViewProps> = ({
                 </div>
               ))}
             </div>
+
+            {/* Bottom Add Folder Helper Card */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isScanning}
+              className="w-full py-2.5 px-4 border border-dashed border-slate-800 hover:border-emerald-500/50 bg-slate-950/40 hover:bg-emerald-500/5 text-slate-400 hover:text-emerald-300 text-xs font-medium rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer mt-2"
+            >
+              <FolderPlus className="w-4 h-4 text-emerald-400" />
+              <span>+ Add another folder to this scan batch</span>
+            </button>
           </div>
         )}
 
