@@ -60,7 +60,7 @@ async function runPhase1Tests() {
   const createUserRes = await request(app)
     .post('/api/users/create')
     .set('Authorization', `Bearer ${token}`)
-    .send({ username: 'operatorB', password: 'password123', role: 'OPERATOR' });
+    .send({ username: 'operatorB', password: 'Password123!@#', role: 'OPERATOR' });
   assert.strictEqual(createUserRes.status, 200);
   const userBId = createUserRes.body.user_id;
   // Note: userB is created under admin's org (orgId). Let's create an Org B user directly via SQL or api
@@ -70,7 +70,7 @@ async function runPhase1Tests() {
   // Test 5: Login as userB and verify cross-tenant scan restriction
   const loginBRes = await request(app)
     .post('/api/auth/login')
-    .send({ username: 'operatorB', password: 'password123' });
+    .send({ username: 'operatorB', password: 'Password123!@#' });
   assert.strictEqual(loginBRes.status, 200);
   const tokenB = loginBRes.body.token;
 

@@ -258,7 +258,9 @@ async function runPrivacyGovernanceTestSuite() {
   // TEST 5: Regulatory Compliance Support Statement
   // =========================================================================
   console.log('\n--- TEST 5: Regulatory & Legal Compliance Support Statement ---');
-  const govRes = await request(app).get('/api/privacy/governance');
+  const govRes = await request(app)
+    .get('/api/privacy/governance')
+    .set('Authorization', `Bearer ${tokenA}`);
   assert.strictEqual(govRes.status, 200);
   assert(govRes.body.regulatory_readiness.disclaimer.includes('support organizational compliance'));
   assert(govRes.body.regulatory_readiness.disclaimer.includes('does not constitute automatic or official certification'));

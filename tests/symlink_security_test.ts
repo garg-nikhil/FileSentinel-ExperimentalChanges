@@ -158,10 +158,10 @@ async function runSymlinkTests() {
   console.log('  ✔ PASS: Protected/invalid path handled safely.');
 
   // Cleanup test artifacts
-  fs.rmSync(workspaceDir, { recursive: true, force: true });
-  fs.rmSync(outsideDir, { recursive: true, force: true });
-  fs.rmSync(siblingDir, { recursive: true, force: true });
-  if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
+  try { fs.rmSync(workspaceDir, { recursive: true, force: true, maxRetries: 3 }); } catch {}
+  try { fs.rmSync(outsideDir, { recursive: true, force: true, maxRetries: 3 }); } catch {}
+  try { fs.rmSync(siblingDir, { recursive: true, force: true, maxRetries: 3 }); } catch {}
+  try { if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath); } catch {}
 
   console.log('=== ALL 12 SYMLINK & WORKSPACE ESCAPE SECURITY TESTS PASSED ===');
 }
