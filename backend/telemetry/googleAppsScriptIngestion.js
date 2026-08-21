@@ -288,6 +288,79 @@ function processBatchEvents(ss, events, cache) {
 }
 
 /**
+ * Maps a SCAN_COMPLETED event payload to the exact 33 Scans sheet columns.
+ * Extracts nested device telemetry (OS, OS_version, machine_type) and computes derived metrics safely.
+ */
+function mapScanCompletedEvent(evt) {
+  var dev = evt.device_telemetry || {};
+  var critical = (typeof evt.critical_count === 'number') ? evt.critical_count : 0;
+  var high = (typeof evt.high_count === 'number') ? evt.high_count : 0;
+  var medium = (typeof evt.medium_count === 'number') ? evt.medium_count : 0;
+  var low = (typeof evt.low_count === 'number') ? evt.low_count : 0;
+  var totalFindings = (typeof evt.findings_count === 'number') ? evt.findings_count : (critical + high + medium + low);
+
+  var fileCount = (evt.file_count !== undefined && evt.file_count !== null && evt.file_count !== '')
+    ? evt.file_count
+    : (evt.files_discovered !== undefined ? evt.files_discovered : '');
+
+  var filesProcessed = (evt.files_processed !== undefined && evt.files_processed !== null)
+    ? evt.files_processed
+    : '';
+
+  var filesSkipped = (evt.files_skipped !== undefined && evt.files_skipped !== null && evt.files_skipped !== '')
+    ? evt.files_skipped
+    : (typeof evt.files_discovered === 'number' && typeof evt.files_processed === 'number'
+        ? Math.max(0, evt.files_discovered - evt.files_processed)
+        : (evt.files_rejected_by_resource_limits || 0));
+
+  var os = evt.OS || dev.os_family || '';
+  var osVersion = evt.OS_version || dev.os_version || '';
+  var machineType = evt.machine_type || dev.architecture || '';
+
+  var riskScore = (evt.risk_score !== undefined && evt.risk_score !== null && evt.risk_score !== '')
+    ? evt.risk_score
+    : (evt.overall_score !== undefined ? evt.overall_score : '');
+
+  var timestampUtc = evt.timestamp_utc || evt.completed_at || evt.started_at || new Date().toISOString();
+
+  return {
+    Event_ID: evt.event_id || '',
+    scan_id: evt.scan_id || '',
+    Timestamp_UTC: timestampUtc,
+    Organization_ID: evt.organization_id || '',
+    device_id: evt.device_id || '',
+    endpoint_id: evt.endpoint_id || evt.device_id || '',
+    user_id: evt.user_id || '',
+    machine_type: machineType,
+    OS: os,
+    OS_version: osVersion,
+    application_version: evt.application_version || dev.filesentinel_version || '1.0.0',
+    license_id: evt.license_id || '',
+    license_plan: evt.license_plan || '',
+    license_status: evt.license_status || '',
+    license_days_remaining: (evt.license_days_remaining !== undefined && evt.license_days_remaining !== null) ? evt.license_days_remaining : '',
+    scan_type: evt.scan_type || 'FULL_AUDIT',
+    duration_ms: (evt.duration_ms !== undefined && evt.duration_ms !== null) ? evt.duration_ms : '',
+    source_count: (evt.source_count !== undefined && evt.source_count !== null && evt.source_count !== '') ? evt.source_count : 1,
+    file_count: fileCount,
+    files_processed: filesProcessed,
+    files_skipped: filesSkipped,
+    files_failed: (evt.files_failed !== undefined && evt.files_failed !== null) ? evt.files_failed : 0,
+    findings_count: totalFindings,
+    critical_count: critical,
+    high_count: high,
+    medium_count: medium,
+    low_count: low,
+    risk_score: riskScore,
+    checklist_id: evt.checklist_id || '',
+    checklist_version: evt.checklist_version || '2026.1',
+    offline_mode: evt.offline_mode !== undefined ? evt.offline_mode : false,
+    started_at: evt.started_at || '',
+    completed_at: evt.completed_at || ''
+  };
+}
+
+/**
  * Routes an individual event payload to the target sheet based on event_type.
  * Returns structured diagnostic info including sheet name and row counts.
  */
@@ -297,6 +370,8 @@ function routeEventToSheet(ss, evt) {
 
   if (type === 'SCAN_COMPLETED') {
     targetSheet = 'Scans';
+    var mappedScan = mapScanCompletedEvent(evt);
+    return appendRow(ss, targetSheet, mappedScan);
   } else if (type === 'ENDPOINT_ASSESSMENT_COMPLETED') {
     targetSheet = evt.target ? 'Endpoint_Targets' : 'Endpoint_Compliance';
   } else if (type && type.indexOf('LICENSE_') === 0) {

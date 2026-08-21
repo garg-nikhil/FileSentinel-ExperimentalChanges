@@ -77,6 +77,23 @@ export interface ScanTelemetryPayload {
   device_telemetry?: DeviceTelemetry;
   debug_filenames_opt_in?: boolean;
   debug_filenames?: string[];
+  timestamp_utc?: string;
+  endpoint_id?: string;
+  machine_type?: string;
+  OS?: string;
+  OS_version?: string;
+  license_id?: string;
+  license_plan?: string;
+  license_status?: string;
+  license_days_remaining?: number;
+  scan_type?: string;
+  source_count?: number;
+  file_count?: number;
+  files_skipped?: number;
+  findings_count?: number;
+  risk_score?: number;
+  checklist_id?: string;
+  offline_mode?: boolean;
 }
 
 export interface TelemetryQueueItem {
@@ -227,6 +244,28 @@ export class TelemetryService {
         } catch {}
       }
 
+      // Extract active license metadata if safely present
+      let licenseId: string | undefined = undefined;
+      let licensePlan: string | undefined = undefined;
+      let licenseStatus: string | undefined = undefined;
+      let licenseDaysRemaining: number | undefined = undefined;
+
+      try {
+        const lic = this.db.prepare("SELECT license_id, plan_id, status, expires_at FROM licenses WHERE organization_id = ? AND status = 'ACTIVE' LIMIT 1").get(orgId) as any;
+        if (lic) {
+          licenseId = lic.license_id;
+          licensePlan = lic.plan_id;
+          licenseStatus = lic.status;
+          if (lic.expires_at) {
+            licenseDaysRemaining = Math.max(0, Math.ceil((new Date(lic.expires_at).getTime() - Date.now()) / (1000 * 86400)));
+          }
+        }
+      } catch {}
+
+      const totalFindings = criticalCount + highCount + mediumCount + lowCount;
+      const sourceCount = scanRow.root_path ? scanRow.root_path.split(', ').length : 1;
+      const filesSkipped = Math.max(0, filesDiscovered - filesProcessed);
+
       return {
         scan_id: scanId,
         organization_id: orgId,
@@ -256,7 +295,24 @@ export class TelemetryService {
         scan_status: scanRow.status || 'COMPLETED',
         device_telemetry: deviceTelemetry,
         debug_filenames_opt_in: debugFilenamesOptIn,
-        debug_filenames: debugFilenames
+        debug_filenames: debugFilenames,
+        timestamp_utc: completedAt,
+        endpoint_id: deviceId,
+        machine_type: deviceTelemetry.architecture,
+        OS: deviceTelemetry.os_family,
+        OS_version: deviceTelemetry.os_version,
+        license_id: licenseId,
+        license_plan: licensePlan,
+        license_status: licenseStatus,
+        license_days_remaining: licenseDaysRemaining,
+        scan_type: 'FULL_AUDIT',
+        source_count: sourceCount,
+        file_count: filesDiscovered,
+        files_skipped: filesSkipped,
+        findings_count: totalFindings,
+        risk_score: overallScore,
+        checklist_id: auditRow ? 'CHECKLIST-RBI-2026' : undefined,
+        offline_mode: false
       };
     } catch (err) {
       console.error('[Telemetry] Error building telemetry payload:', err);
