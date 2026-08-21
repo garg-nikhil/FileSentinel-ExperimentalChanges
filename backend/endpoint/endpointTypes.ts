@@ -191,6 +191,10 @@ export interface WebTargetResult {
   detectionSource?: DetectionSource;
   runtimeType?: RuntimeType;
   provenance?: AssessmentProvenance;
+  networkReachable?: boolean;
+  policyBlockDetected?: boolean;
+  serviceIdentityConfirmed?: boolean;
+  probeAttempts?: number;
 }
 
 export interface CategorySummary {

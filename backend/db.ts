@@ -445,16 +445,31 @@ export function getDatabase(dbPath?: string): DatabaseSync {
       );
 
       CREATE TABLE IF NOT EXISTS telemetry_queue (
-        queue_id TEXT PRIMARY KEY,
-        scan_id TEXT NOT NULL,
-        organization_id TEXT NOT NULL,
+        id TEXT PRIMARY KEY,
+        queue_id TEXT,
+        event_id TEXT UNIQUE NOT NULL,
+        event_type TEXT NOT NULL DEFAULT 'SCAN_COMPLETED',
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        priority TEXT NOT NULL DEFAULT 'NORMAL',
         payload_json TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'PENDING',
-        attempts INTEGER DEFAULT 0,
-        last_attempt_at TEXT,
-        error_message TEXT,
+        scan_id TEXT,
+        organization_id TEXT,
         created_at TEXT NOT NULL,
+        attempt_count INTEGER DEFAULT 0,
+        attempts INTEGER DEFAULT 0,
+        next_attempt_at TEXT,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        locked_at TEXT,
+        last_error TEXT,
+        error_message TEXT,
+        last_attempt_at TEXT,
         synced_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS system_identity (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS billing_customers (
@@ -731,6 +746,62 @@ export function getDatabase(dbPath?: string): DatabaseSync {
         db.exec('DELETE FROM sessions;');
         db.exec('ALTER TABLE sessions RENAME COLUMN token TO token_hash;');
         console.log('[DB Migration] Migrated sessions table: token -> token_hash');
+      }
+
+      const queueCols = db.prepare("PRAGMA table_info(telemetry_queue)").all() as { name: string }[];
+      if (queueCols.length > 0) {
+        if (!queueCols.some(c => c.name === 'id') && queueCols.some(c => c.name === 'queue_id')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN id TEXT;");
+          db.exec("UPDATE telemetry_queue SET id = queue_id WHERE id IS NULL;");
+        }
+        if (!queueCols.some(c => c.name === 'queue_id') && queueCols.some(c => c.name === 'id')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN queue_id TEXT;");
+          db.exec("UPDATE telemetry_queue SET queue_id = id WHERE queue_id IS NULL;");
+        }
+        if (!queueCols.some(c => c.name === 'event_id')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN event_id TEXT;");
+          db.exec("UPDATE telemetry_queue SET event_id = COALESCE(id, queue_id, hex(randomblob(16))) WHERE event_id IS NULL;");
+        }
+        if (!queueCols.some(c => c.name === 'event_type')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN event_type TEXT DEFAULT 'SCAN_COMPLETED';");
+        }
+        if (!queueCols.some(c => c.name === 'schema_version')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN schema_version INTEGER DEFAULT 1;");
+        }
+        if (!queueCols.some(c => c.name === 'priority')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN priority TEXT DEFAULT 'NORMAL';");
+        }
+        if (!queueCols.some(c => c.name === 'scan_id')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN scan_id TEXT;");
+        }
+        if (!queueCols.some(c => c.name === 'organization_id')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN organization_id TEXT;");
+        }
+        if (!queueCols.some(c => c.name === 'attempt_count')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN attempt_count INTEGER DEFAULT 0;");
+        }
+        if (!queueCols.some(c => c.name === 'attempts')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN attempts INTEGER DEFAULT 0;");
+        }
+        if (!queueCols.some(c => c.name === 'next_attempt_at')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN next_attempt_at TEXT;");
+        }
+        if (!queueCols.some(c => c.name === 'locked_at')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN locked_at TEXT;");
+        }
+        if (!queueCols.some(c => c.name === 'last_error')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN last_error TEXT;");
+        }
+        if (!queueCols.some(c => c.name === 'error_message')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN error_message TEXT;");
+        }
+        if (!queueCols.some(c => c.name === 'last_attempt_at')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN last_attempt_at TEXT;");
+        }
+        if (!queueCols.some(c => c.name === 'synced_at')) {
+          db.exec("ALTER TABLE telemetry_queue ADD COLUMN synced_at TEXT;");
+        }
+        db.exec("CREATE INDEX IF NOT EXISTS idx_telemetry_queue_status_next ON telemetry_queue(status, next_attempt_at);");
       }
     } catch (migErr) {
       console.warn('[DB Migration] migration check:', migErr);

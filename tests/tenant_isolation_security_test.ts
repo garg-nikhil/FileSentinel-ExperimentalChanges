@@ -56,16 +56,18 @@ async function runTenantIsolationTestSuite() {
   const tokenDisabled = 'tok-disabled-' + crypto.randomBytes(16).toString('hex');
   const expiresAt = new Date(Date.now() + 86400000).toISOString();
 
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenA, userA, orgA, deviceA, expiresAt, now);
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenB, userB, orgB, deviceB, expiresAt, now);
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenViewerA, userViewerA, orgA, deviceA, expiresAt, now);
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenRevoked, userA, orgA, deviceRevoked, expiresAt, now);
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenDisabled, userDisabled, orgA, deviceA, expiresAt, now);
+  const hashTok = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
+
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashTok(tokenA), userA, orgA, deviceA, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashTok(tokenB), userB, orgB, deviceB, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashTok(tokenViewerA), userViewerA, orgA, deviceA, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashTok(tokenRevoked), userA, orgA, deviceRevoked, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashTok(tokenDisabled), userDisabled, orgA, deviceA, expiresAt, now);
 
   // Tenant A scan, file, finding, quarantine, audit session
   const scanIdA = 'SCAN-ALPHA-001';

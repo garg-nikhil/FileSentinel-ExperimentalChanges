@@ -1,4 +1,4 @@
-process.env.FILE_SENTINEL_DEV_MODE = 'true';
+import crypto from 'node:crypto';
 import { getDatabase } from '../backend/db.js';
 import { LicensingEngine } from '../backend/licensing.js';
 import assert from 'node:assert';
@@ -219,8 +219,10 @@ async function runPhase2LicensingTests() {
   const hash = 'testhash';
   db.prepare('INSERT INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)')
     .run('user-grace-admin', orgGraceId, 'graceadmin', `${salt}:${hash}`, 'ORG_ADMIN', now);
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run('token-grace-admin', 'user-grace-admin', orgGraceId, 'dev-grace-1', nextWeek, now);
+  const tokenGraceAdmin = 'token-grace-admin';
+  const tokenHash = crypto.createHash('sha256').update(tokenGraceAdmin).digest('hex');
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(tokenHash, 'user-grace-admin', orgGraceId, 'dev-grace-1', nextWeek, now);
 
   const getLicRes = await request(app)
     .get('/api/license')

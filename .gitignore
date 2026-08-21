@@ -7,8 +7,11 @@ coverage/
 .env*
 !.env.example
 *.db
+*.sqlite
 backend/uploads/
 .filesentinel_protected/
 *.secret
 storage_bucket/quarantine_staging/
+scratch/
+temp_*
 

@@ -162,22 +162,23 @@ async function runMultiTenantSecurityTests() {
   // --- TEST 5: Device Revocation & Token Invalidation ---
   console.log('5. Testing Device Revocation and Token Revocation...');
   const tokenAlpha = 'tok-alpha-session-xyz';
+  const tokenHashAlpha = crypto.createHash('sha256').update(tokenAlpha).digest('hex');
   db.prepare(`
-    INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at)
+    INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at)
     VALUES (?, 'usr-alpha-admin', 'org-alpha', 'dev-alpha-1', ?, ?)
-  `).run(tokenAlpha, new Date(Date.now() + 3600000).toISOString(), now);
+  `).run(tokenHashAlpha, new Date(Date.now() + 3600000).toISOString(), now);
 
   // Revoke device
   db.prepare('UPDATE devices SET revoked = 1 WHERE device_id = ?').run('dev-alpha-1');
 
   // Check device revocation session query
   const sessionCheck = db.prepare(`
-    SELECT s.token, u.disabled, d.revoked as device_revoked
+    SELECT s.token_hash, u.disabled, d.revoked as device_revoked
     FROM sessions s
     JOIN users u ON s.user_id = u.user_id
     LEFT JOIN devices d ON s.device_id = d.device_id
-    WHERE s.token = ?
-  `).get(tokenAlpha) as any;
+    WHERE s.token_hash = ?
+  `).get(tokenHashAlpha) as any;
 
   assert.strictEqual(sessionCheck.device_revoked, 1, 'Device revoked status must be reflected in session lookup');
   console.log('   ✓ Device revocation enforcement verified');

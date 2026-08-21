@@ -146,6 +146,9 @@ async function runNoLocalDeletionRegressionTest() {
     if (fs.existsSync(tempDir)) {
       try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
     }
+    if ((server as any).closeAllConnections) {
+      (server as any).closeAllConnections();
+    }
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
@@ -155,8 +158,6 @@ async function runNoLocalDeletionRegressionTest() {
 
   if (failed > 0) {
     process.exit(1);
-  } else {
-    process.exit(0);
   }
 }
 

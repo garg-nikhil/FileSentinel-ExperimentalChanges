@@ -42,8 +42,32 @@ export class FileScannerEngine {
   ): string[] {
     if (currentDepth > maxDepth) return discovered;
 
+    // Enforce BASE_ALLOWED_DIR restriction if configured
+    if (process.env.BASE_ALLOWED_DIR) {
+      const baseAllowed = process.env.BASE_ALLOWED_DIR;
+      let baseAllowedReal = baseAllowed;
+      try {
+        baseAllowedReal = fs.realpathSync(baseAllowed);
+      } catch {}
+      const targetAbs = path.resolve(rootPath);
+      let targetReal = targetAbs;
+      try {
+        targetReal = fs.realpathSync(targetAbs);
+      } catch {}
+
+      const allowedRel = path.relative(baseAllowedReal, targetReal);
+      const isAllowedOutside = allowedRel === '..' || allowedRel.startsWith('..' + path.sep) || allowedRel.startsWith('../') || allowedRel.startsWith('..\\') || path.isAbsolute(allowedRel);
+      if (isAllowedOutside) {
+        throw new Error(`Access denied: Requested path '${rootPath}' is outside the allowed directory '${baseAllowed}'`);
+      }
+    }
+
     try {
-      if (!fs.existsSync(rootPath) && !fs.lstatSync(rootPath).isSymbolicLink()) return discovered;
+      let isSymlink = false;
+      try {
+        isSymlink = fs.lstatSync(rootPath).isSymbolicLink();
+      } catch {}
+      if (!fs.existsSync(rootPath) && !isSymlink) return discovered;
 
       let baseRootReal = rootRealPath;
       if (!baseRootReal) {
@@ -815,8 +839,13 @@ export class FileScannerEngine {
           }
         );
         if (telemetryPayload) {
+          // 1. Immediately persist local scan history for local analytics/dashboards
+          try {
+            telemetryService.recordScanTelemetry(telemetryPayload);
+          } catch {}
+
+          // 2. Enqueue for asynchronous background Google Sheets synchronization (remains PENDING)
           telemetryService.enqueue(telemetryPayload);
-          telemetryService.flushQueue();
         }
       } catch (telemetryErr) {
         // NON-BLOCKING INVARIANT: Telemetry failure must NEVER fail the local scan or audit results.

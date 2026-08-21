@@ -4,7 +4,7 @@ import { api } from '../services/api';
 import { useToast } from '../context/ToastContext';
 import { 
   FolderSearch, Play, Pause, RefreshCw, CheckCircle2, AlertTriangle, 
-  ShieldCheck, UploadCloud, Folder, Trash2, CheckSquare, Square, 
+  ShieldCheck, UploadCloud, Folder, FolderPlus, Trash2, CheckSquare, Square, 
   FileText, Search, Clock, PauseCircle, AlertCircle, CheckCircle, FileCode,
   RotateCcw, Timer, Zap, Hourglass
 } from 'lucide-react';
@@ -26,6 +26,14 @@ interface UploadedFolder {
   progress: number;
   selected: boolean;
   errorMsg?: string;
+  rawFiles?: File[];
+}
+
+interface DuplicateWarningState {
+  files: File[];
+  folderName: string;
+  existingFolder: UploadedFolder;
+  samplePaths: string[];
 }
 
 export const ScanView: React.FC<ScanViewProps> = ({
@@ -36,6 +44,7 @@ export const ScanView: React.FC<ScanViewProps> = ({
 }) => {
   const { showToast } = useToast();
   const [uploadedFolders, setUploadedFolders] = useState<UploadedFolder[]>([]);
+  const [duplicateWarning, setDuplicateWarning] = useState<DuplicateWarningState | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
@@ -288,15 +297,11 @@ export const ScanView: React.FC<ScanViewProps> = ({
     }
   };
 
-  const handleDirectorySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    
-    const files = Array.from(e.target.files) as File[];
+  const executeFolderUpload = async (files: File[]) => {
     const firstPath = (files[0] as any).webkitRelativePath || files[0]?.name || 'Uploaded Folder';
     const topFolder = firstPath.split('/')[0] || 'Uploaded Folder';
-    
     const folderId = 'folder_' + Math.random().toString(36).substring(2, 9);
-    
+
     const newFolderItem: UploadedFolder = {
       id: folderId,
       folderName: topFolder,
@@ -304,7 +309,8 @@ export const ScanView: React.FC<ScanViewProps> = ({
       fileCount: files.length,
       status: 'uploading',
       progress: 0,
-      selected: true
+      selected: true,
+      rawFiles: files
     };
 
     setUploadedFolders(prev => [...prev, newFolderItem]);
@@ -333,6 +339,121 @@ export const ScanView: React.FC<ScanViewProps> = ({
         status: 'error',
         errorMsg: err.message || 'Upload failed'
       } : f));
+    }
+  };
+
+  const handleDirectorySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    
+    const files = Array.from(e.target.files) as File[];
+    const firstPath = (files[0] as any).webkitRelativePath || files[0]?.name || 'Uploaded Folder';
+    const topFolder = firstPath.split('/')[0] || 'Uploaded Folder';
+    
+    // Double-check by inspecting folder name and file relative paths
+    const newRelativePaths = files.map(f => (f as any).webkitRelativePath || f.name);
+    const newPathSet = new Set(newRelativePaths);
+
+    const duplicate = uploadedFolders.find(existing => {
+      // 1. Same top folder name
+      if (existing.folderName.toLowerCase() === topFolder.toLowerCase()) {
+        return true;
+      }
+      // 2. Check full overlap in relative file paths
+      if (existing.rawFiles && existing.rawFiles.length > 0) {
+        const existingPaths = existing.rawFiles.map(f => (f as any).webkitRelativePath || f.name);
+        const matchingCount = existingPaths.filter(p => newPathSet.has(p)).length;
+        if (matchingCount > 0 && matchingCount === existingPaths.length && matchingCount === newRelativePaths.length) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (duplicate) {
+      // Trigger duplicate inspection warning modal
+      setDuplicateWarning({
+        files,
+        folderName: topFolder,
+        existingFolder: duplicate,
+        samplePaths: newRelativePaths.slice(0, 4)
+      });
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      return;
+    }
+
+    await executeFolderUpload(files);
+  };
+
+  const handleConfirmDuplicateUpload = async () => {
+    if (!duplicateWarning) return;
+    const filesToUpload = duplicateWarning.files;
+    setDuplicateWarning(null);
+    await executeFolderUpload(filesToUpload);
+  };
+
+  const handleCancelDuplicateUpload = () => {
+    if (duplicateWarning) {
+      showToast({
+        title: 'DUPLICATE UPLOAD SKIPPED',
+        message: `Skipped duplicate upload for folder '${duplicateWarning.folderName}'.`,
+        type: 'info'
+      });
+    }
+    setDuplicateWarning(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleRetryUpload = async (folderId: string) => {
+    const target = uploadedFolders.find(f => f.id === folderId);
+    if (!target || target.status !== 'error') return;
+
+    if (!target.rawFiles || target.rawFiles.length === 0) {
+      fileInputRef.current?.click();
+      return;
+    }
+
+    setUploadedFolders(prev => prev.map(f => f.id === folderId ? {
+      ...f,
+      status: 'uploading',
+      progress: 0,
+      errorMsg: undefined
+    } : f));
+
+    try {
+      const result = await api.uploadDirectory(target.rawFiles, (pct) => {
+        setUploadedFolders(prev => prev.map(f => f.id === folderId ? { ...f, progress: pct } : f));
+      });
+
+      setUploadedFolders(prev => prev.map(f => f.id === folderId ? {
+        ...f,
+        rootPath: result.rootPath,
+        fileCount: result.fileCount,
+        status: 'completed',
+        progress: 100,
+        folderName: result.folderName || target.folderName
+      } : f));
+
+      showToast({
+        title: 'FOLDER UPLOAD COMPLETED',
+        message: `Successfully uploaded ${result.fileCount} file(s) for ${target.folderName}`,
+        type: 'success'
+      });
+    } catch (err: any) {
+      setUploadedFolders(prev => prev.map(f => f.id === folderId ? {
+        ...f,
+        status: 'error',
+        errorMsg: err.message || 'Upload retry failed'
+      } : f));
+
+      showToast({
+        title: 'FOLDER UPLOAD FAILED',
+        message: err.message || 'Retry failed for folder upload',
+        type: 'violation'
+      });
     }
   };
 
@@ -494,6 +615,17 @@ export const ScanView: React.FC<ScanViewProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
+            {uploadedFolders.length > 0 && (
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isScanning}
+                className="bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 text-xs px-3.5 py-2.5 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-50"
+                title="Add more target folders to the scan batch"
+              >
+                <FolderPlus className="w-4 h-4 text-emerald-400" />
+                Add More Folders
+              </button>
+            )}
             <button 
               onClick={() => fileInputRef.current?.click()}
               disabled={isScanning}
@@ -548,7 +680,19 @@ export const ScanView: React.FC<ScanViewProps> = ({
                   {selectedCompletedCount === uploadedFolders.length ? 'Deselect All' : 'Select All'}
                 </button>
               </div>
-              <span>{selectedCompletedCount} of {uploadedFolders.length} folders selected for scan</span>
+              <div className="flex items-center gap-3">
+                <span>{selectedCompletedCount} of {uploadedFolders.length} folders selected for scan</span>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isScanning}
+                  className="text-xs text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 px-2.5 py-1 rounded-md border border-emerald-500/30 transition-colors disabled:opacity-50"
+                  title="Upload another folder to include in scan"
+                >
+                  <FolderPlus className="w-3.5 h-3.5" />
+                  <span>Add Folder</span>
+                </button>
+              </div>
             </div>
 
             <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
@@ -612,6 +756,18 @@ export const ScanView: React.FC<ScanViewProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+                    {folder.status === 'error' && (
+                      <button
+                        type="button"
+                        onClick={() => handleRetryUpload(folder.id)}
+                        disabled={isScanning}
+                        className="px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 hover:text-rose-200 border border-rose-500/30 text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-40"
+                        title="Retry failed folder upload"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Retry</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => removeFolder(folder.id)}
                       disabled={isScanning}
@@ -624,6 +780,17 @@ export const ScanView: React.FC<ScanViewProps> = ({
                 </div>
               ))}
             </div>
+
+            {/* Bottom Add Folder Helper Card */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isScanning}
+              className="w-full py-2.5 px-4 border border-dashed border-slate-800 hover:border-emerald-500/50 bg-slate-950/40 hover:bg-emerald-500/5 text-slate-400 hover:text-emerald-300 text-xs font-medium rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer mt-2"
+            >
+              <FolderPlus className="w-4 h-4 text-emerald-400" />
+              <span>+ Add another folder to this scan batch</span>
+            </button>
           </div>
         )}
 
@@ -1078,6 +1245,81 @@ export const ScanView: React.FC<ScanViewProps> = ({
           <li>DLP rules run locally without remote cloud dependencies.</li>
         </ul>
       </div>
+
+      {/* Duplicate Folder Warning Modal */}
+      {duplicateWarning && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in-20">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl shadow-amber-950/20">
+            <div className="flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 flex-shrink-0 mt-0.5">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                  Duplicate Folder Detected
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  The folder <span className="font-semibold text-amber-400 font-mono">"{duplicateWarning.folderName}"</span> matches a folder already present in your scan list.
+                </p>
+              </div>
+            </div>
+
+            {/* Folder Path & Metadata Inspection Box */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3 text-xs">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
+                <span className="text-slate-400 font-medium">Selected Folder:</span>
+                <span className="font-mono font-bold text-slate-200">{duplicateWarning.folderName} ({duplicateWarning.files.length} files)</span>
+              </div>
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
+                <span className="text-slate-400 font-medium">Existing Upload:</span>
+                <span className="font-mono text-emerald-400 font-semibold truncate max-w-[240px]">
+                  {duplicateWarning.existingFolder.rootPath || duplicateWarning.existingFolder.folderName} ({duplicateWarning.existingFolder.fileCount} files)
+                </span>
+              </div>
+              
+              <div>
+                <span className="text-slate-400 font-medium block mb-1.5">Inspected Sample File Paths:</span>
+                <div className="bg-slate-900/80 rounded-lg p-2.5 space-y-1 font-mono text-[11px] text-slate-300 max-h-24 overflow-y-auto border border-slate-800/50">
+                  {duplicateWarning.samplePaths.map((p, idx) => (
+                    <div key={idx} className="truncate text-slate-400 flex items-center gap-1.5">
+                      <span className="text-amber-400/80">•</span>
+                      <span className="truncate">{p}</span>
+                    </div>
+                  ))}
+                  {duplicateWarning.files.length > 4 && (
+                    <div className="text-[10px] text-slate-500 italic pt-0.5">
+                      ...and {duplicateWarning.files.length - 4} more files
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-amber-950/20 border border-amber-500/20 rounded-xl p-3 text-xs text-amber-300 flex items-center gap-2.5">
+              <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <span>Uploading duplicate folders will analyze identical files again and may create duplicate scan findings.</span>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={handleCancelDuplicateUpload}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+              >
+                Cancel / Skip Upload
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDuplicateUpload}
+                className="px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold transition-colors shadow-lg shadow-amber-950/40 flex items-center gap-1.5 cursor-pointer"
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                Upload Anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

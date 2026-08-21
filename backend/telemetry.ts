@@ -2,6 +2,38 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import {
+  TelemetryEventType,
+  TelemetryPriority,
+  TelemetryQueueStatus,
+  CURRENT_TELEMETRY_SCHEMA_VERSION,
+  BaseTelemetryEvent,
+  ScanStartedPayload,
+  ScanCompletedPayload,
+  ScanFailedPayload,
+  EndpointAssessmentStartedPayload,
+  EndpointAssessmentCompletedPayload,
+  EndpointTargetTelemetryPayload,
+  LicenseEventPayload,
+  AppStartedPayload,
+  ReportGeneratedPayload,
+  ChecklistTogglePayload,
+  ErrorEventPayload
+} from './telemetry/telemetryTypes.js';
+import {
+  filterAndSanitizeEvent,
+  generateEndpointId,
+  getOrCreateInstallationIdentity,
+  getTelemetryConfig,
+  getEventPriority
+} from './telemetry/telemetryPrivacy.js';
+import { TelemetryQueueRepository } from './telemetry/telemetryQueue.js';
+
+export * from './telemetry/telemetryTypes.js';
+export * from './telemetry/telemetryPrivacy.js';
+export * from './telemetry/telemetryQueue.js';
+export * from './telemetry/telemetrySyncService.js';
+export * from './telemetry/localAnalytics.js';
 
 export interface DeviceTelemetry {
   device_id: string;
@@ -83,9 +115,27 @@ export function collectDeviceTelemetry(deviceId: string): DeviceTelemetry {
 
 export class TelemetryService {
   private db: DatabaseSync;
+  private queueRepo: TelemetryQueueRepository;
+  private installationId: string;
+  private installationSecret: string;
 
   constructor(db: DatabaseSync) {
     this.db = db;
+    this.queueRepo = new TelemetryQueueRepository(db);
+    const identity = getOrCreateInstallationIdentity(db);
+    this.installationId = identity.installationId;
+    this.installationSecret = identity.installationSecret;
+  }
+
+  public getQueueRepo(): TelemetryQueueRepository {
+    return this.queueRepo;
+  }
+
+  public getInstallationIdentity(): { installationId: string; installationSecret: string } {
+    return {
+      installationId: this.installationId,
+      installationSecret: this.installationSecret
+    };
   }
 
   /**
@@ -219,19 +269,23 @@ export class TelemetryService {
    */
   public enqueue(payload: ScanTelemetryPayload): string {
     const queueId = `TQ-${crypto.randomUUID().substring(0, 8)}`;
+    const eventId = `EVT-${queueId}`;
     const now = new Date().toISOString();
 
     const stmt = this.db.prepare(`
       INSERT INTO telemetry_queue (
-        queue_id, scan_id, organization_id, payload_json, status, attempts, created_at
-      ) VALUES (?, ?, ?, ?, 'PENDING', 0, ?)
+        id, queue_id, event_id, event_type, schema_version, priority, scan_id, organization_id, payload_json, status, attempts, attempt_count, created_at, next_attempt_at
+      ) VALUES (?, ?, ?, 'SCAN_COMPLETED', 1, 'NORMAL', ?, ?, ?, 'PENDING', 0, 0, ?, ?)
     `);
 
     stmt.run(
       queueId,
+      queueId,
+      eventId,
       payload.scan_id,
       payload.organization_id,
       JSON.stringify(payload),
+      now,
       now
     );
 
@@ -384,7 +438,7 @@ export class TelemetryService {
       payload.low_count ?? 0,
       payload.overall_score ?? 0,
       payload.parameters_evaluated ?? 0,
-      payload.scan_status,
+      payload.scan_status || (payload as any).status || 'COMPLETED',
       payload.device_telemetry ? JSON.stringify(payload.device_telemetry) : null,
       payload.debug_filenames_opt_in ? 1 : 0,
       now,
@@ -762,5 +816,464 @@ export class TelemetryService {
       failed_count: failed,
       total_queued: pending + synced + failed
     };
+  }
+
+  // =========================================================================
+  // PHASE T2: EVENT-BASED TELEMETRY DISPATCH METHODS
+  // All methods are non-blocking and safe against failures or outages.
+  // =========================================================================
+
+  /**
+   * Records SCAN_STARTED event
+   */
+  public recordScanStarted(
+    scanId: string,
+    orgId: string,
+    userId: string,
+    deviceId: string,
+    details?: {
+      scan_type?: string;
+      checklist_id?: string;
+      checklist_version?: string;
+      source_count?: number;
+      offline_mode?: boolean;
+    }
+  ): { success: boolean; event_id?: string; error?: string } {
+    try {
+      const endpointId = generateEndpointId(deviceId, this.installationSecret);
+      const payload: ScanStartedPayload = {
+        event_id: `EVT-SCN-START-${crypto.randomUUID()}`,
+        event_type: 'SCAN_STARTED',
+        schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+        timestamp_utc: new Date().toISOString(),
+        installation_id: this.installationId,
+        organization_id: orgId || 'org-default',
+        device_id: deviceId || 'dev-default',
+        endpoint_id: endpointId,
+        scan_id: scanId,
+        scan_type: details?.scan_type || 'FULL',
+        checklist_id: details?.checklist_id,
+        checklist_version: details?.checklist_version,
+        source_count: details?.source_count ?? 1,
+        offline_mode: details?.offline_mode ?? false
+      };
+
+      return this.queueRepo.enqueue(payload, 'LOW');
+    } catch (err: any) {
+      console.warn('[Telemetry] recordScanStarted error:', err?.message);
+      return { success: false, error: err?.message };
+    }
+  }
+
+  /**
+   * Records SCAN_COMPLETED event
+   */
+  public recordScanCompleted(
+    scanId: string,
+    orgId: string,
+    userId: string,
+    deviceId: string,
+    details?: Partial<ScanCompletedPayload>
+  ): { success: boolean; event_id?: string; error?: string } {
+    try {
+      const endpointId = generateEndpointId(deviceId, this.installationSecret);
+      const payload: ScanCompletedPayload = {
+        event_id: `EVT-SCN-COMP-${crypto.randomUUID()}`,
+        event_type: 'SCAN_COMPLETED',
+        schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+        timestamp_utc: new Date().toISOString(),
+        installation_id: this.installationId,
+        organization_id: orgId || 'org-default',
+        device_id: deviceId || 'dev-default',
+        endpoint_id: endpointId,
+        machine_type: details?.machine_type || os.arch(),
+        OS: details?.OS || os.platform(),
+        OS_version: details?.OS_version || os.release(),
+        architecture: details?.architecture || os.arch(),
+        application_version: details?.application_version || '1.0.0',
+        license_id: details?.license_id,
+        license_plan: details?.license_plan,
+        license_status: details?.license_status,
+        license_days_remaining: details?.license_days_remaining,
+        scan_id: scanId,
+        scan_type: details?.scan_type || 'FULL',
+        duration_ms: details?.duration_ms ?? 0,
+        source_count: details?.source_count ?? 1,
+        file_count: details?.file_count ?? 0,
+        files_processed: details?.files_processed ?? 0,
+        files_skipped: details?.files_skipped ?? 0,
+        files_failed: details?.files_failed ?? 0,
+        findings_count: details?.findings_count ?? 0,
+        critical_count: details?.critical_count ?? 0,
+        high_count: details?.high_count ?? 0,
+        medium_count: details?.medium_count ?? 0,
+        low_count: details?.low_count ?? 0,
+        risk_score: details?.risk_score ?? 0,
+        checklist_id: details?.checklist_id,
+        checklist_version: details?.checklist_version,
+        offline_mode: details?.offline_mode ?? false
+      };
+
+      return this.queueRepo.enqueue(payload, 'NORMAL');
+    } catch (err: any) {
+      console.warn('[Telemetry] recordScanCompleted error:', err?.message);
+      return { success: false, error: err?.message };
+    }
+  }
+
+  /**
+   * Records SCAN_FAILED event
+   */
+  public recordScanFailed(
+    scanId: string,
+    orgId: string,
+    userId: string,
+    deviceId: string,
+    details?: {
+      scan_type?: string;
+      duration_ms?: number;
+      error_code?: string;
+      sanitized_error_category?: string;
+      offline_mode?: boolean;
+    }
+  ): { success: boolean; event_id?: string; error?: string } {
+    try {
+      const endpointId = generateEndpointId(deviceId, this.installationSecret);
+      const payload: ScanFailedPayload = {
+        event_id: `EVT-SCN-FAIL-${crypto.randomUUID()}`,
+        event_type: 'SCAN_FAILED',
+        schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+        timestamp_utc: new Date().toISOString(),
+        installation_id: this.installationId,
+        organization_id: orgId || 'org-default',
+        device_id: deviceId || 'dev-default',
+        endpoint_id: endpointId,
+        scan_id: scanId,
+        scan_type: details?.scan_type || 'FULL',
+        duration_ms: details?.duration_ms ?? 0,
+        error_code: details?.error_code || 'SCAN_ERROR',
+        sanitized_error_category: details?.sanitized_error_category || 'GENERAL_ERROR',
+        offline_mode: details?.offline_mode ?? false
+      };
+
+      return this.queueRepo.enqueue(payload, 'LOW');
+    } catch (err: any) {
+      console.warn('[Telemetry] recordScanFailed error:', err?.message);
+      return { success: false, error: err?.message };
+    }
+  }
+
+  /**
+   * Records ENDPOINT_ASSESSMENT_STARTED event
+   */
+  public recordEndpointAssessmentStarted(
+    assessmentId: string,
+    orgId: string,
+    deviceId: string,
+    details?: { platform?: string }
+  ): { success: boolean; event_id?: string; error?: string } {
+    try {
+      const endpointId = generateEndpointId(deviceId, this.installationSecret);
+      const payload: EndpointAssessmentStartedPayload = {
+        event_id: `EVT-EP-START-${crypto.randomUUID()}`,
+        event_type: 'ENDPOINT_ASSESSMENT_STARTED',
+        schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+        timestamp_utc: new Date().toISOString(),
+        installation_id: this.installationId,
+        organization_id: orgId || 'org-default',
+        device_id: deviceId || 'dev-default',
+        endpoint_id: endpointId,
+        assessment_id: assessmentId,
+        platform: details?.platform || os.platform()
+      };
+
+      return this.queueRepo.enqueue(payload, 'LOW');
+    } catch (err: any) {
+      console.warn('[Telemetry] recordEndpointAssessmentStarted error:', err?.message);
+      return { success: false, error: err?.message };
+    }
+  }
+
+  /**
+   * Records ENDPOINT_ASSESSMENT_COMPLETED event and optional per-target probe telemetry
+   */
+  public recordEndpointAssessmentCompleted(
+    assessmentId: string,
+    orgId: string,
+    deviceId: string,
+    details: Partial<EndpointAssessmentCompletedPayload>,
+    targetResults?: Partial<EndpointTargetTelemetryPayload>[]
+  ): { success: boolean; event_id?: string; error?: string } {
+    try {
+      const endpointId = generateEndpointId(deviceId, this.installationSecret);
+      const payload: EndpointAssessmentCompletedPayload = {
+        event_id: `EVT-EP-COMP-${crypto.randomUUID()}`,
+        event_type: 'ENDPOINT_ASSESSMENT_COMPLETED',
+        schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+        timestamp_utc: new Date().toISOString(),
+        installation_id: this.installationId,
+        organization_id: orgId || 'org-default',
+        device_id: deviceId || 'dev-default',
+        endpoint_id: endpointId,
+        assessment_id: assessmentId,
+        OS: details.OS || os.platform(),
+        machine_type: details.machine_type || os.arch(),
+        usb_status: details.usb_status || 'UNKNOWN',
+        usb_storage_detected: details.usb_storage_detected ?? false,
+        social_media_accessible_count: details.social_media_accessible_count ?? 0,
+        social_media_blocked_count: details.social_media_blocked_count ?? 0,
+        social_media_unreachable_count: details.social_media_unreachable_count ?? 0,
+        social_media_indeterminate_count: details.social_media_indeterminate_count ?? 0,
+        personal_email_accessible_count: details.personal_email_accessible_count ?? 0,
+        personal_email_blocked_count: details.personal_email_blocked_count ?? 0,
+        personal_email_unreachable_count: details.personal_email_unreachable_count ?? 0,
+        personal_email_indeterminate_count: details.personal_email_indeterminate_count ?? 0,
+        messaging_accessible_count: details.messaging_accessible_count ?? 0,
+        messaging_blocked_count: details.messaging_blocked_count ?? 0,
+        messaging_unreachable_count: details.messaging_unreachable_count ?? 0,
+        messaging_indeterminate_count: details.messaging_indeterminate_count ?? 0,
+        cloud_storage_accessible_count: details.cloud_storage_accessible_count ?? 0,
+        cloud_storage_blocked_count: details.cloud_storage_blocked_count ?? 0,
+        cloud_storage_unreachable_count: details.cloud_storage_unreachable_count ?? 0,
+        cloud_storage_indeterminate_count: details.cloud_storage_indeterminate_count ?? 0,
+        total_targets_tested: details.total_targets_tested ?? 0,
+        accessible_count: details.accessible_count ?? 0,
+        blocked_count: details.blocked_count ?? 0,
+        unreachable_count: details.unreachable_count ?? 0,
+        indeterminate_count: details.indeterminate_count ?? 0,
+        overall_compliance_score: details.overall_compliance_score ?? 100,
+        assessment_duration_ms: details.assessment_duration_ms ?? 0
+      };
+
+      const res = this.queueRepo.enqueue(payload, 'NORMAL');
+
+      // Optionally enqueue target probe records (for Endpoint_Targets)
+      if (targetResults && Array.isArray(targetResults)) {
+        for (const t of targetResults) {
+          const targetPayload: EndpointTargetTelemetryPayload = {
+            category: t.category || 'UNKNOWN',
+            target: t.target || 'unknown',
+            status: t.status || 'UNKNOWN',
+            confidence: t.confidence || 'LOW',
+            network_reachable: t.network_reachable ?? false,
+            policy_block_detected: t.policy_block_detected ?? false,
+            service_identity_confirmed: t.service_identity_confirmed ?? false,
+            response_time_ms: t.response_time_ms ?? 0,
+            probe_attempts: t.probe_attempts ?? 1,
+            reason_code: t.reason_code || 'NONE',
+            event_id: t.event_id || `EVT-TGT-${crypto.randomUUID()}`,
+            event_type: 'ENDPOINT_ASSESSMENT_COMPLETED',
+            schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+            timestamp_utc: new Date().toISOString(),
+            installation_id: this.installationId,
+            organization_id: orgId || 'org-default',
+            device_id: deviceId || 'dev-default',
+            endpoint_id: endpointId,
+            assessment_id: assessmentId
+          };
+          this.queueRepo.enqueue(targetPayload, 'LOW');
+        }
+      }
+
+      return res;
+    } catch (err: any) {
+      console.warn('[Telemetry] recordEndpointAssessmentCompleted error:', err?.message);
+      return { success: false, error: err?.message };
+    }
+  }
+
+  /**
+   * Records LICENSE_* event
+   */
+  public recordLicenseEvent(
+    eventType:
+      | 'LICENSE_ACTIVATED'
+      | 'LICENSE_RENEWED'
+      | 'LICENSE_EXPIRING'
+      | 'LICENSE_EXPIRED'
+      | 'LICENSE_REVALIDATED',
+    orgId: string,
+    deviceId: string,
+    details: {
+      license_id: string;
+      plan: string;
+      status: string;
+      issued_at: string;
+      expires_at: string;
+      days_remaining: number;
+      device_count?: number;
+      max_devices?: number;
+    }
+  ): { success: boolean; event_id?: string; error?: string } {
+    try {
+      const endpointId = generateEndpointId(deviceId, this.installationSecret);
+      const payload: LicenseEventPayload = {
+        event_id: `EVT-LIC-${crypto.randomUUID()}`,
+        event_type: eventType,
+        schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+        timestamp_utc: new Date().toISOString(),
+        installation_id: this.installationId,
+        organization_id: orgId || 'org-default',
+        device_id: deviceId || 'dev-default',
+        endpoint_id: endpointId,
+        license_id: details.license_id,
+        plan: details.plan,
+        status: details.status,
+        issued_at: details.issued_at,
+        expires_at: details.expires_at,
+        days_remaining: details.days_remaining,
+        device_count: details.device_count ?? 1,
+        max_devices: details.max_devices ?? 1
+      };
+
+      const priority: TelemetryPriority = (eventType === 'LICENSE_ACTIVATED' || eventType === 'LICENSE_RENEWED' || eventType === 'LICENSE_EXPIRED')
+        ? 'HIGH'
+        : 'LOW';
+
+      return this.queueRepo.enqueue(payload, priority);
+    } catch (err: any) {
+      console.warn('[Telemetry] recordLicenseEvent error:', err?.message);
+      return { success: false, error: err?.message };
+    }
+  }
+
+  /**
+   * Records APP_STARTED event
+   */
+  public recordAppLifecycle(
+    eventType: 'APP_STARTED',
+    orgId?: string,
+    deviceId?: string,
+    details?: Partial<AppStartedPayload>
+  ): { success: boolean; event_id?: string; error?: string } {
+    try {
+      const dev = deviceId || 'dev-default';
+      const endpointId = generateEndpointId(dev, this.installationSecret);
+      const payload: AppStartedPayload = {
+        event_id: `EVT-APP-${crypto.randomUUID()}`,
+        event_type: 'APP_STARTED',
+        schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+        timestamp_utc: new Date().toISOString(),
+        installation_id: this.installationId,
+        organization_id: orgId || 'org-default',
+        device_id: dev,
+        endpoint_id: endpointId,
+        application_version: details?.application_version || '1.0.0',
+        OS: details?.OS || os.platform(),
+        OS_version: details?.OS_version || os.release(),
+        machine_type: details?.machine_type || os.arch(),
+        architecture: details?.architecture || os.arch()
+      };
+
+      return this.queueRepo.enqueue(payload, 'LOW');
+    } catch (err: any) {
+      console.warn('[Telemetry] recordAppLifecycle error:', err?.message);
+      return { success: false, error: err?.message };
+    }
+  }
+
+  /**
+   * Records REPORT_GENERATED event
+   */
+  public recordReportGenerated(
+    reportId: string,
+    scanId: string,
+    orgId: string,
+    userId: string,
+    deviceId: string,
+    details: { report_type: string; compliance_score: number }
+  ): { success: boolean; event_id?: string; error?: string } {
+    try {
+      const endpointId = generateEndpointId(deviceId, this.installationSecret);
+      const payload: ReportGeneratedPayload = {
+        event_id: `EVT-RPT-${crypto.randomUUID()}`,
+        event_type: 'REPORT_GENERATED',
+        schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+        timestamp_utc: new Date().toISOString(),
+        installation_id: this.installationId,
+        organization_id: orgId || 'org-default',
+        device_id: deviceId || 'dev-default',
+        endpoint_id: endpointId,
+        report_id: reportId,
+        scan_id: scanId,
+        report_type: details.report_type,
+        compliance_score: details.compliance_score
+      };
+
+      return this.queueRepo.enqueue(payload, 'NORMAL');
+    } catch (err: any) {
+      console.warn('[Telemetry] recordReportGenerated error:', err?.message);
+      return { success: false, error: err?.message };
+    }
+  }
+
+  /**
+   * Records CHECKLIST_ENABLED or CHECKLIST_DISABLED event
+   */
+  public recordChecklistToggled(
+    checklistId: string,
+    checklistVersion: string,
+    enabled: boolean,
+    orgId: string,
+    userId: string,
+    deviceId: string
+  ): { success: boolean; event_id?: string; error?: string } {
+    try {
+      const endpointId = generateEndpointId(deviceId, this.installationSecret);
+      const eventType = enabled ? 'CHECKLIST_ENABLED' : 'CHECKLIST_DISABLED';
+      const payload: ChecklistTogglePayload = {
+        event_id: `EVT-CHK-${crypto.randomUUID()}`,
+        event_type: eventType,
+        schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+        timestamp_utc: new Date().toISOString(),
+        installation_id: this.installationId,
+        organization_id: orgId || 'org-default',
+        device_id: deviceId || 'dev-default',
+        endpoint_id: endpointId,
+        checklist_id: checklistId,
+        checklist_version: checklistVersion,
+        status: enabled ? 'ENABLED' : 'DISABLED'
+      };
+
+      return this.queueRepo.enqueue(payload, 'LOW');
+    } catch (err: any) {
+      console.warn('[Telemetry] recordChecklistToggled error:', err?.message);
+      return { success: false, error: err?.message };
+    }
+  }
+
+  /**
+   * Records sanitized ERROR event
+   */
+  public recordError(
+    errorCode: string,
+    errorCategory: string,
+    rawMessage: string,
+    orgId?: string,
+    userId?: string,
+    deviceId?: string
+  ): { success: boolean; event_id?: string; error?: string } {
+    try {
+      const dev = deviceId || 'dev-default';
+      const endpointId = generateEndpointId(dev, this.installationSecret);
+      const payload: ErrorEventPayload = {
+        event_id: `EVT-ERR-${crypto.randomUUID()}`,
+        event_type: 'ERROR',
+        schema_version: CURRENT_TELEMETRY_SCHEMA_VERSION,
+        timestamp_utc: new Date().toISOString(),
+        installation_id: this.installationId,
+        organization_id: orgId || 'org-default',
+        device_id: dev,
+        endpoint_id: endpointId,
+        error_code: errorCode,
+        error_category: errorCategory,
+        sanitized_message: rawMessage
+      };
+
+      return this.queueRepo.enqueue(payload, 'HIGH');
+    } catch (err: any) {
+      console.warn('[Telemetry] recordError error:', err?.message);
+      return { success: false, error: err?.message };
+    }
   }
 }
