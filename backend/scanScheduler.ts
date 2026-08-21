@@ -76,6 +76,9 @@ export class ScanSchedulerService {
         this.isScanning = false;
       }
     }, 30000);
+    if (this.timerInterval && typeof this.timerInterval.unref === 'function') {
+      this.timerInterval.unref();
+    }
   }
 
   /**

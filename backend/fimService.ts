@@ -52,8 +52,14 @@ export class FileIntegrityMonitor {
     }
 
     // Fallback: compute baselines at runtime (less secure, first-run scenario)
-    console.warn('[FIM] WARNING: No pre-computed baseline manifest found. Computing baselines at runtime. This means the first run always passes even if files are already tampered.');
-    console.warn('[FIM] To fix: Generate .fim-baseline.json from CI/CD using `FileIntegrityMonitor.generateManifest()`');
+    const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV === 'development';
+    if (!isDevMode) {
+      console.error('[FIM] SECURITY WARNING: No pre-computed baseline manifest found.');
+      console.error('[FIM] In production, a tampered binary will pass its own integrity check on first run.');
+      console.error('[FIM] Generate .fim-baseline.json from CI/CD using `FileIntegrityMonitor.generateManifest()`');
+    } else {
+      console.warn('[FIM] Dev mode: Computing baselines at runtime.');
+    }
 
     for (const relPath of this.criticalFiles) {
       const fullPath = path.join(baseDir, relPath);

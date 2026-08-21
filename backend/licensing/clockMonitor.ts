@@ -50,6 +50,9 @@ export class ClockMonitorService {
     this.timerInterval = setInterval(() => {
       this.checkClock(onRollbackDetected);
     }, this.checkIntervalMs);
+    if (this.timerInterval && typeof this.timerInterval.unref === 'function') {
+      this.timerInterval.unref();
+    }
   }
 
   /**
