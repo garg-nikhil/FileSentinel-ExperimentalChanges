@@ -14,7 +14,7 @@ import request from 'supertest';
 import express from 'express';
 import crypto from 'node:crypto';
 import { getDatabase } from '../backend/db.js';
-import { hashPassword } from '../backend/auth.js';
+import { hashPassword, hashSessionToken } from '../backend/auth.js';
 import { createApiRouter } from '../backend/routes.js';
 import { BillingService } from '../backend/billing.js';
 import { LicensingEngine } from '../backend/licensing.js';
@@ -49,8 +49,8 @@ async function runEndpointSecurityUnitTests() {
   const token = 'tok-sec-' + crypto.randomBytes(16).toString('hex');
   const expiresAt = new Date(Date.now() + 86400000).toISOString();
 
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(token, userId, orgId, deviceId, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashSessionToken(token), userId, orgId, deviceId, expiresAt, now);
 
   let passed = 0;
 
@@ -185,9 +185,7 @@ async function runEndpointSecurityUnitTests() {
     const res = await request(app)
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${token}`)
-      .send({
-        deviceId
-      });
+      .send({});
 
     assert.strictEqual(res.status, 200, 'Legitimate assessment must succeed');
     assert.ok(res.body.id.startsWith('EP-ASM-'), 'Assessment ID must be generated');

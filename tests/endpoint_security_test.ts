@@ -19,7 +19,7 @@ import request from 'supertest';
 import express from 'express';
 import crypto from 'node:crypto';
 import { getDatabase } from '../backend/db.js';
-import { hashPassword } from '../backend/auth.js';
+import { hashPassword, hashSessionToken } from '../backend/auth.js';
 import { createApiRouter } from '../backend/routes.js';
 
 async function runEndpointSecurityTests() {
@@ -63,23 +63,23 @@ async function runEndpointSecurityTests() {
 
   // Valid session with deviceA
   const tokenValid = 'tok-sec-val-' + crypto.randomBytes(16).toString('hex');
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenValid, userA, orgA, deviceA, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashSessionToken(tokenValid), userA, orgA, deviceA, expiresAt, now);
 
   // Session without device_id
   const tokenNoDevice = 'tok-sec-nodev-' + crypto.randomBytes(16).toString('hex');
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, NULL, ?, ?)')
-    .run(tokenNoDevice, userA, orgA, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, NULL, ?, ?)')
+    .run(hashSessionToken(tokenNoDevice), userA, orgA, expiresAt, now);
 
   // Session with cross-tenant deviceB
   const tokenCrossTenantDevice = 'tok-sec-crossdev-' + crypto.randomBytes(16).toString('hex');
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenCrossTenantDevice, userA, orgA, deviceB, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashSessionToken(tokenCrossTenantDevice), userA, orgA, deviceB, expiresAt, now);
 
   // Session with revoked device
   const tokenRevokedDevice = 'tok-sec-revdev-' + crypto.randomBytes(16).toString('hex');
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenRevokedDevice, userA, orgA, deviceRevoked, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashSessionToken(tokenRevokedDevice), userA, orgA, deviceRevoked, expiresAt, now);
 
   let passed = 0;
 

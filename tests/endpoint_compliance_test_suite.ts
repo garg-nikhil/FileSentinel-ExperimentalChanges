@@ -1,7 +1,7 @@
 process.env.FILE_SENTINEL_DEV_MODE = 'false';
 
 import { getDatabase } from '../backend/db.js';
-import { hashPassword } from '../backend/auth.js';
+import { hashPassword, hashSessionToken } from '../backend/auth.js';
 import { createApiRouter } from '../backend/routes.js';
 import { USBDetector } from '../backend/endpoint/usbDetector.js';
 import {
@@ -28,28 +28,27 @@ async function runEndpointComplianceTestSuite() {
   const db = getDatabase(':memory:');
   const now = new Date().toISOString();
 
-  // Setup Tenants
-  const orgA = 'org-tenant-a';
-  const orgB = 'org-tenant-b';
-  const userA = 'usr-admin-a';
-  const userB = 'usr-admin-b';
-  const userViewerA = 'usr-viewer-a';
-  const userDisabled = 'usr-disabled';
+  const orgA = 'org-ep-001';
+  const orgB = 'org-ep-002';
+  db.prepare('INSERT INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)')
+    .run(orgA, 'Primary Bank Org A', now);
+  db.prepare('INSERT INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)')
+    .run(orgB, 'Secondary Bank Org B', now);
 
-  const deviceA = 'dev-device-a';
-  const deviceB = 'dev-device-b';
-  const deviceRevoked = 'dev-device-revoked';
+  const deviceA = 'dev-ep-001';
+  const deviceB = 'dev-ep-002';
+  const deviceRevoked = 'dev-ep-revoked';
+  db.prepare('INSERT INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, ?, ?)')
+    .run(deviceA, orgA, 'LAPTOP-WORKSTATION-A', 0, now);
+  db.prepare('INSERT INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, ?, ?)')
+    .run(deviceB, orgB, 'LAPTOP-WORKSTATION-B', 0, now);
+  db.prepare('INSERT INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, ?, ?)')
+    .run(deviceRevoked, orgA, 'LAPTOP-REVOKED', 1, now);
 
-  db.prepare('INSERT INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)').run(orgA, 'Tenant Alpha Corp', now);
-  db.prepare('INSERT INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)').run(orgB, 'Tenant Beta Ltd', now);
-
-  db.prepare('INSERT INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, 0, ?)')
-    .run(deviceA, orgA, 'Device A', now);
-  db.prepare('INSERT INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, 0, ?)')
-    .run(deviceB, orgB, 'Device B', now);
-  db.prepare('INSERT INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, 1, ?)')
-    .run(deviceRevoked, orgA, 'Revoked Device', now);
-
+  const userA = 'usr-ep-001';
+  const userB = 'usr-ep-002';
+  const userViewerA = 'usr-viewer-001';
+  const userDisabled = 'usr-disabled-001';
   db.prepare('INSERT INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)')
     .run(userA, orgA, 'admin_a', hashPassword('Secret123!'), 'ORG_ADMIN', now);
   db.prepare('INSERT INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)')
@@ -66,16 +65,16 @@ async function runEndpointComplianceTestSuite() {
   const tokenDisabled = 'tok-disabled-' + crypto.randomBytes(16).toString('hex');
   const expiresAt = new Date(Date.now() + 86400000).toISOString();
 
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenA, userA, orgA, deviceA, expiresAt, now);
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenB, userB, orgB, deviceB, expiresAt, now);
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenViewerA, userViewerA, orgA, deviceA, expiresAt, now);
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenRevoked, userA, orgA, deviceRevoked, expiresAt, now);
-  db.prepare('INSERT INTO sessions (token, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(tokenDisabled, userDisabled, orgA, deviceA, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashSessionToken(tokenA), userA, orgA, deviceA, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashSessionToken(tokenB), userB, orgB, deviceB, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashSessionToken(tokenViewerA), userViewerA, orgA, deviceA, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashSessionToken(tokenRevoked), userA, orgA, deviceRevoked, expiresAt, now);
+  db.prepare('INSERT INTO sessions (token_hash, user_id, org_id, device_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(hashSessionToken(tokenDisabled), userDisabled, orgA, deviceA, expiresAt, now);
 
   const app = express();
   app.use(express.json());

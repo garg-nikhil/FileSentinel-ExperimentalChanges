@@ -197,8 +197,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     category: 'PERSONAL_EMAIL',
     service_name: 'Outlook.com',
     primary_domain: 'outlook.live.com',
-    probe_url: 'https://outlook.live.com',
-    expected_identifiers: ['outlook', 'live.com', 'microsoft'],
+    probe_url: 'https://login.live.com',
+    expected_identifiers: ['outlook', 'live.com', 'microsoft', 'msft', 'login'],
     allowed_domains: ['live.com', 'microsoft.com', 'office.com', 'outlook.com', 'microsoftonline.com']
   },
   {
@@ -245,7 +245,7 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Messenger',
     primary_domain: 'www.messenger.com',
     probe_url: 'https://www.messenger.com',
-    expected_identifiers: ['messenger', 'facebook'],
+    expected_identifiers: ['messenger', 'facebook', 'meta'],
     allowed_domains: ['messenger.com', 'facebook.com', 'fb.com', 'meta.com']
   },
   {
@@ -336,11 +336,11 @@ export class WebAccessDetector {
 
   constructor(options: WebAccessDetectorOptions = {}) {
     this.targets = options.targets || DEFAULT_WEB_TARGETS;
-    this.connectionTimeoutMs = options.connectionTimeoutMs || 1200;
-    this.requestTimeoutMs = options.requestTimeoutMs || 1500;
+    this.connectionTimeoutMs = options.connectionTimeoutMs || 4000;
+    this.requestTimeoutMs = options.requestTimeoutMs || 5000;
     this.maxResponseSizeBytes = options.maxResponseSizeBytes || 65536; // 64 KB cap
-    this.maxRedirects = options.maxRedirects || 3;
-    this.concurrencyLimit = options.concurrencyLimit || 8;
+    this.maxRedirects = options.maxRedirects || 5;
+    this.concurrencyLimit = options.concurrencyLimit || 6;
     this.mockProbeHandler = options.mockProbeHandler;
   }
 
@@ -419,12 +419,14 @@ export class WebAccessDetector {
       // Stage 1: DNS Resolution Check & Sinkhole Detection
       let dnsAddresses: string[] = [];
       try {
-        const dnsTimeout = Math.min(this.connectionTimeoutMs, 1200);
+        const dnsTimeout = Math.min(this.connectionTimeoutMs, 3500);
+        let timerId: NodeJS.Timeout | undefined;
         const lookupPromise = dns.lookup(parsedUrl.hostname, { all: true });
-        const timerPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('DNS resolution timed out')), dnsTimeout)
-        );
+        const timerPromise = new Promise<never>((_, reject) => {
+          timerId = setTimeout(() => reject(new Error('DNS resolution timed out')), dnsTimeout);
+        });
         const lookupResult = await Promise.race([lookupPromise, timerPromise]);
+        if (timerId) clearTimeout(timerId);
         dnsAddresses = lookupResult.map(r => r.address);
       } catch (dnsErr: any) {
         const code = dnsErr?.code;
@@ -617,15 +619,17 @@ export class WebAccessDetector {
       const client = https;
       let settled = false;
 
+      const reqPath = (parsed.pathname || '/') + (parsed.search || '');
+
       const req = client.request(
         {
           hostname: parsed.hostname,
           port: parsed.port || 443,
-          path: parsed.pathname + parsed.search,
+          path: reqPath,
           method: 'GET',
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 FileSentinel-Probe/1.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Connection': 'close'
           },
@@ -638,6 +642,22 @@ export class WebAccessDetector {
 
           // 1. Handle Redirects (301, 302, 303, 307, 308)
           if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
+            res.resume(); // Drain stream to release underlying socket
+
+            if (redirectCount >= this.maxRedirects) {
+              settled = true;
+              return resolve({
+                category: target.category,
+                service: target.service_name,
+                target_domain: target.primary_domain,
+                status: 'ACCESSIBLE',
+                confidence: 'MEDIUM',
+                detectionMethod: 'HTTPS_PROBE',
+                httpStatusCode: statusCode,
+                reason: `Target accessible with HTTP ${statusCode} redirect (max redirects reached)`
+              });
+            }
+
             let nextUrl: string;
             let nextParsed: URL;
             try {
@@ -646,21 +666,6 @@ export class WebAccessDetector {
             } catch {
               nextUrl = location;
               nextParsed = parsed;
-            }
-
-            // Check for captive portal redirect (e.g. login.wifi, auth.gateway, captive)
-            if (/captive|hotspot|portal|login\?|radius|auth\./i.test(nextUrl)) {
-              settled = true;
-              return resolve({
-                category: target.category,
-                service: target.service_name,
-                target_domain: target.primary_domain,
-                status: 'BLOCKED',
-                confidence: 'HIGH',
-                detectionMethod: 'HTTPS_PROBE',
-                httpStatusCode: statusCode,
-                reason: `Redirected to captive / network login portal: ${nextUrl}`
-              });
             }
 
             // Check for corporate proxy block redirect (e.g., block.corporate.com, fortiguard, zscaler)
@@ -675,6 +680,22 @@ export class WebAccessDetector {
                 detectionMethod: 'HTTPS_PROBE',
                 httpStatusCode: statusCode,
                 reason: `Redirected to corporate firewall block portal: ${nextUrl}`
+              });
+            }
+
+            // Check for captive portal redirect (exclude legitimate target auth / SSO endpoints)
+            const isTargetAuth = /accounts\.google\.com|login\.live\.com|login\.microsoftonline\.com|appleid\.apple\.com|auth\.proton\.me|login\.yahoo\.com|account\.box\.com|auth0|oauth/i.test(nextUrl);
+            if (!isTargetAuth && /(captive|hotspot-login|wifilogin|portal\/login|radius-login)/i.test(nextUrl)) {
+              settled = true;
+              return resolve({
+                category: target.category,
+                service: target.service_name,
+                target_domain: target.primary_domain,
+                status: 'BLOCKED',
+                confidence: 'HIGH',
+                detectionMethod: 'HTTPS_PROBE',
+                httpStatusCode: statusCode,
+                reason: `Redirected to captive / network login portal: ${nextUrl}`
               });
             }
 
@@ -700,6 +721,7 @@ export class WebAccessDetector {
 
           // 2. Handle HTTP Status Blocks (403, 451)
           if (statusCode === 451) {
+            res.resume();
             settled = true;
             return resolve({
               category: target.category,
@@ -720,8 +742,6 @@ export class WebAccessDetector {
           res.on('data', (chunk) => {
             if (bodyBuffer.length < this.maxResponseSizeBytes) {
               bodyBuffer += chunk;
-            } else {
-              res.destroy(); // Terminate stream once size limit reached
             }
           });
 
@@ -762,20 +782,6 @@ export class WebAccessDetector {
           confidence: 'MEDIUM',
           detectionMethod: 'HTTPS_PROBE',
           reason: 'Network request timed out'
-        });
-      });
-
-      req.on('close', () => {
-        if (settled) return;
-        settled = true;
-        return resolve({
-          category: target.category,
-          service: target.service_name,
-          target_domain: target.primary_domain,
-          status: 'UNREACHABLE',
-          confidence: 'MEDIUM',
-          detectionMethod: 'HTTPS_PROBE',
-          reason: 'Connection closed'
         });
       });
 
@@ -823,6 +829,10 @@ export class WebAccessDetector {
   ): Omit<WebTargetResult, 'responseTimeMs' | 'timestamp'> {
     const lowerBody = body.toLowerCase();
     const serverHeader = String(headers['server'] || '').toLowerCase();
+    const setCookieHeader = String(headers['set-cookie'] || '').toLowerCase();
+    const cspHeader = String(headers['content-security-policy'] || '').toLowerCase();
+    const locationHeader = String(headers['location'] || '').toLowerCase();
+    const allHeaders = `${serverHeader} ${setCookieHeader} ${cspHeader} ${locationHeader}`.toLowerCase();
 
     // 1. Corporate Firewall / Proxy Block Signature Detection
     const blockPageSignatures = [
@@ -909,16 +919,14 @@ export class WebAccessDetector {
       };
     }
 
-    // 5. Successful Status (HTTP 200, 204, 302)
-    if (statusCode >= 200 && statusCode < 400) {
+    // 5. Successful Status (HTTP 200..399 or 400/401/405 with target signatures)
+    if ((statusCode >= 200 && statusCode < 400) || statusCode === 400 || statusCode === 401 || statusCode === 405) {
       // Deterministic validation: must match expected target service signatures
       const matchesExpectedIdentifier = target.expected_identifiers.length > 0 && target.expected_identifiers.some(ident => {
         const cleanIdent = ident.toLowerCase().trim();
-        return lowerBody.includes(cleanIdent) || serverHeader.includes(cleanIdent);
+        return lowerBody.includes(cleanIdent) || allHeaders.includes(cleanIdent);
       });
 
-      // CRITICAL: A response is ACCESSIBLE ONLY when deterministic evidence matches the target service.
-      // Large generic body length (>500) MUST NOT trigger ACCESSIBLE.
       if (matchesExpectedIdentifier) {
         return {
           category: target.category,
@@ -932,7 +940,7 @@ export class WebAccessDetector {
         };
       }
 
-      // Generic response (no identifying signatures) -> INDETERMINATE (Never guess)
+      // Generic response (no identifying signatures) -> INDETERMINATE
       return {
         category: target.category,
         service: target.service_name,
