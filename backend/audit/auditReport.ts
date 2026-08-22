@@ -461,6 +461,35 @@ export class AuditReportGenerator {
     <div class="meta-item"><span class="meta-label">Zero-Tolerance Fatal Failures</span><span class="meta-value" style="color:${session.fatal_failures_count > 0 ? '#dc2626' : '#16a34a'}">${session.fatal_failures_count}</span></div>
   </div>
 
+  <!-- File-Level Outcome Summary -->
+  <div class="section-title">
+    <span>Scanned File Outcome Summary (Deterministic File-Level Inspection)</span>
+    <span style="font-size:12px; font-weight:600; color:#64748b;">${session.file_summary?.total_scanned || 0} Total Files Evaluated</span>
+  </div>
+
+  <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-bottom:24px;">
+    <div style="background:#f8fafc; border:1px solid #cbd5e1; padding:12px; border-radius:6px; text-align:center;">
+      <div style="font-size:11px; font-weight:800; color:#64748b; text-transform:uppercase;">Total Scanned</div>
+      <div style="font-size:22px; font-weight:900; color:#0f172a; margin-top:4px;">${session.file_summary?.total_scanned || 0}</div>
+      <div style="font-size:10px; color:#64748b;">100% evaluated</div>
+    </div>
+    <div style="background:#f0fdf4; border:1px solid #86efac; padding:12px; border-radius:6px; text-align:center;">
+      <div style="font-size:11px; font-weight:800; color:#16a34a; text-transform:uppercase;">✓ Passed Files</div>
+      <div style="font-size:22px; font-weight:900; color:#16a34a; margin-top:4px;">${session.file_summary?.passed || 0}</div>
+      <div style="font-size:10px; color:#16a34a; font-weight:700;">${session.file_summary?.passed_pct || 0}% clean</div>
+    </div>
+    <div style="background:#fef2f2; border:1px solid #fca5a5; padding:12px; border-radius:6px; text-align:center;">
+      <div style="font-size:11px; font-weight:800; color:#dc2626; text-transform:uppercase;">✕ Failed Files</div>
+      <div style="font-size:22px; font-weight:900; color:#dc2626; margin-top:4px;">${session.file_summary?.failed || 0}</div>
+      <div style="font-size:10px; color:#dc2626; font-weight:700;">${session.file_summary?.failed_pct || 0}% violations</div>
+    </div>
+    <div style="background:#fffbeb; border:1px solid #fde68a; padding:12px; border-radius:6px; text-align:center;">
+      <div style="font-size:11px; font-weight:800; color:#d97706; text-transform:uppercase;">⚠ Files for Review</div>
+      <div style="font-size:22px; font-weight:900; color:#d97706; margin-top:4px;">${session.file_summary?.review || 0}</div>
+      <div style="font-size:10px; color:#d97706; font-weight:700;">${session.file_summary?.review_pct || 0}% ambiguous</div>
+    </div>
+  </div>
+
   ${fatalFailures.length > 0 ? `
     <div style="background:#fef2f2; border:1.5px solid #fca5a5; padding:18px; border-radius:8px; margin-bottom:28px;">
       <h3 style="color:#991b1b; margin:0 0 10px 0; font-size:15px; font-weight:800;">🔴 ZERO-TOLERANCE FATAL COMPLIANCE FAILURES</h3>
@@ -607,12 +636,24 @@ export class AuditReportGenerator {
           <td><strong>${r.score_earned}</strong> / ${r.max_score}</td>
           <td>
             <div>${r.reason}</div>
+            ${r.detection_results ? `
+              <div style="margin-top:6px; padding:6px; background:#f8fafc; border-radius:4px; border:1px solid #e2e8f0; font-size:11px;">
+                <div style="font-weight:700; color:${r.detection_results.status === 'FAIL' ? '#dc2626' : r.detection_results.status === 'REVIEW' ? '#d97706' : '#16a34a'};">
+                  Detection Engine: ${r.detection_results.status}
+                </div>
+                ${r.detection_results.affected_files && r.detection_results.affected_files.length > 0 ? `
+                  <div style="margin-top:3px; color:#475569;">
+                    Flagged: ${r.detection_results.affected_files.map((af: any) => af.filename + ' (' + af.detection_type + ' - ' + af.confidence + ')').join(', ')}
+                  </div>
+                ` : ''}
+              </div>
+            ` : ''}
             ${r.evidence.length > 0 ? `
               <div style="margin-top:6px;">
                 <span class="evidence-tag">📄 ${r.evidence[0].filename || 'Matched_Doc'}</span>
                 ${r.evidence[0].sha256 ? `<div style="font-family:monospace; font-size:10px; color:#64748b; margin-top:2px;">SHA256: ${r.evidence[0].sha256}</div>` : ''}
               </div>
-            ` : '<div style="color:#94a3b8; font-style:italic; margin-top:2px;">No evidence matched</div>'}
+            ` : !r.detection_results ? '<div style="color:#94a3b8; font-style:italic; margin-top:2px;">No evidence matched</div>' : ''}
           </td>
         </tr>
         `;

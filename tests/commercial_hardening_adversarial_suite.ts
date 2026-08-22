@@ -32,8 +32,7 @@ async function runCommercialHardeningSuite() {
     }
   }
 
-  const dbPath = path.join(process.cwd(), 'test_hardening_gate.db');
-  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  const dbPath = path.join(process.cwd(), `test_hardening_gate_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.db`);
   const db = getDatabase(dbPath);
 
   // Initialize sample organizations

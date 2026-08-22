@@ -131,7 +131,113 @@ export const AuditDetailDrawer: React.FC<AuditDetailDrawerProps> = ({
             )}
           </div>
 
-          {/* Sub-Control / Compound Requirement Breakdown */}
+          {/* Detection Engine Results */}
+          {parameterResult.detection_results && (
+            <div className="mt-5 space-y-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <Shield className="w-3.5 h-3.5 text-indigo-500" />
+                Detection Engine Results
+              </h3>
+
+              {parameterResult.detection_results.status === 'PASS' && (
+                <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs space-y-1">
+                  <div className="flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300 font-bold">
+                    <CheckCircle2 className="w-4 h-4" />
+                    ✓ PASS — No Sensitive Data Detected
+                  </div>
+                  <p className="text-emerald-700 dark:text-emerald-400">
+                    {parameterResult.detection_results.explanation}
+                  </p>
+                </div>
+              )}
+
+              {parameterResult.detection_results.status === 'FAIL' && (
+                <div className="p-4 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl text-xs space-y-3">
+                  <div className="flex items-center gap-1.5 text-rose-800 dark:text-rose-300 font-bold">
+                    <XCircle className="w-4 h-4" />
+                    ✕ FAIL — Sensitive Data Detected
+                  </div>
+                  <p className="text-rose-700 dark:text-rose-400">
+                    {parameterResult.detection_results.explanation}
+                  </p>
+
+                  {parameterResult.detection_results.affected_files?.length > 0 && (
+                    <div className="space-y-2 pt-1">
+                      <span className="font-bold text-rose-900 dark:text-rose-200">Affected File(s):</span>
+                      {parameterResult.detection_results.affected_files.map((af: any, idx: number) => (
+                        <div key={idx} className="p-2.5 bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-900 rounded-lg space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900 dark:text-slate-100">{af.filename}</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              af.confidence === 'HIGH' ? 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200' :
+                              af.confidence === 'MEDIUM' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200' :
+                              'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                            }`}>
+                              Confidence: {af.confidence}
+                            </span>
+                          </div>
+                          <div className="text-slate-600 dark:text-slate-400">
+                            <span className="font-semibold">Detection:</span> {af.detection_type}
+                          </div>
+                          <div className="text-slate-600 dark:text-slate-400">
+                            <span className="font-semibold">Rule:</span> {af.rule_id}
+                          </div>
+                          <div className="text-slate-500 dark:text-slate-400">
+                            <span className="font-semibold">Why:</span> {af.reason}
+                          </div>
+                          {af.evidence_summary && (
+                            <div className="p-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded font-mono text-[10px] text-amber-600 dark:text-amber-400">
+                              {af.evidence_summary}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {parameterResult.detection_results.status === 'REVIEW' && (
+                <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl text-xs space-y-3">
+                  <div className="flex items-center gap-1.5 text-amber-800 dark:text-amber-300 font-bold">
+                    <AlertTriangle className="w-4 h-4" />
+                    ⚠ REVIEW — Potential Sensitive Data Detected
+                  </div>
+                  <p className="text-amber-700 dark:text-amber-400">
+                    {parameterResult.detection_results.explanation}
+                  </p>
+
+                  {parameterResult.detection_results.affected_files?.length > 0 && (
+                    <div className="space-y-2 pt-1">
+                      <span className="font-bold text-amber-900 dark:text-amber-200">File(s) Requiring Review:</span>
+                      {parameterResult.detection_results.affected_files.map((af: any, idx: number) => (
+                        <div key={idx} className="p-2.5 bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-900 rounded-lg space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900 dark:text-slate-100">{af.filename}</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              af.confidence === 'MEDIUM' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200' :
+                              'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                            }`}>
+                              Confidence: {af.confidence}
+                            </span>
+                          </div>
+                          <div className="text-slate-600 dark:text-slate-400">
+                            <span className="font-semibold">Detection:</span> {af.detection_type}
+                          </div>
+                          <div className="text-slate-500 dark:text-slate-400">
+                            <span className="font-semibold">Why review:</span> {af.reason}
+                          </div>
+                          <div className="text-slate-500 dark:text-slate-400 italic">
+                            Recommended action: Review the file manually.
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {parameterResult.sub_control_results && parameterResult.sub_control_results.length > 0 && (
             <div className="mt-5 space-y-2">
               <div className="flex items-center justify-between">

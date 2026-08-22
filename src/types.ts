@@ -42,6 +42,36 @@ export interface Finding {
   created_at: string;
 }
 
+export type FileOutcomeStatus = 'PASS' | 'FAIL' | 'REVIEW' | 'ERROR' | 'SKIPPED' | 'PROCESSING';
+
+export interface FileOutcomeDetail {
+  file_id: string;
+  filename: string;
+  path: string;
+  outcome: FileOutcomeStatus;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  confidence_score: number;
+  reason: string;
+  violating_rules: string[];
+  review_rules: string[];
+  findings_count: number;
+  scan_status: string;
+  findings?: any[];
+}
+
+export interface FileOutcomeSummary {
+  total_scanned: number;
+  passed: number;
+  failed: number;
+  review: number;
+  skipped: number;
+  errors: number;
+  total_discovered: number;
+  passed_pct: number;
+  failed_pct: number;
+  review_pct: number;
+}
+
 export interface FileItem {
   file_id: string;
   scan_id: string;
@@ -53,6 +83,8 @@ export interface FileItem {
   risk_score: number;
   classification: Classification;
   scan_status: 'SUCCESS' | 'ERROR' | 'SKIPPED' | 'PENDING' | 'PROCESSING';
+  file_outcome?: FileOutcomeStatus;
+  outcome_reason?: string;
   created_at: string;
   modified_at: string;
   findings_count?: {
@@ -85,6 +117,8 @@ export interface ScanSession {
   low_count: number;
   safe_count: number;
   current_file?: string;
+  file_summary?: FileOutcomeSummary;
+  file_outcomes?: FileOutcomeDetail[];
 }
 
 export interface QuarantineItem {
@@ -217,6 +251,7 @@ export interface DashboardStats {
     low: number;
     safe: number;
   };
+  fileSummary?: FileOutcomeSummary;
   classificationBreakdown: Record<Classification, number>;
   extensionBreakdown: Record<string, number>;
   quarantinedCount: number;
@@ -764,6 +799,37 @@ export interface ToastNotification {
   duration?: number;
 }
 
+export type UserRole = 'SYS_ADMIN' | 'SUPER_ADMIN' | 'ORG_ADMIN' | 'AUDITOR' | 'OPERATOR' | 'VIEWER' | 'USER';
 
+export type ConceptualRole = 'SUPER_ADMIN' | 'ORG_ADMIN' | 'USER';
 
+export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated' | 'error';
+
+export interface FeatureEntitlements {
+  FILE_SCAN: boolean;
+  ENDPOINT_COMPLIANCE: boolean;
+  REPORTS: boolean;
+  SCHEDULED_SCAN: boolean;
+  CLOUD_COMPLIANCE: boolean;
+}
+
+export interface AuthUser {
+  userId: string;
+  orgId: string;
+  username: string;
+  role: UserRole;
+  conceptualRole: ConceptualRole;
+  permissions: string[];
+  entitlements: FeatureEntitlements;
+  organizationName?: string;
+  deviceId?: string;
+  sessionId: string;
+  licenseInfo?: {
+    status?: string;
+    ui_state?: string;
+    valid?: boolean;
+    days_remaining?: number;
+    feature_flags?: string[];
+  };
+}
 

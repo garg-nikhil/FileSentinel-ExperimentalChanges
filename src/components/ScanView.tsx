@@ -9,6 +9,7 @@ import {
   RotateCcw, Timer, Zap, Hourglass
 } from 'lucide-react';
 import { ScanProgressGauge } from './ScanProgressGauge';
+import { getFileOutcomeSummary, getFindingsSummary } from '../services/canonicalSelectors';
 
 interface ScanViewProps {
   onScanComplete: (scanId: string) => void;
@@ -1036,29 +1037,45 @@ export const ScanView: React.FC<ScanViewProps> = ({
             </div>
           </div>
 
-          {/* Live telemetry counters */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-2 text-center">
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
-              <div className="text-[10px] text-red-400 uppercase font-semibold">Critical</div>
-              <div className="text-lg font-bold text-red-400 font-mono">{activeScan.critical_count}</div>
-            </div>
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
-              <div className="text-[10px] text-orange-400 uppercase font-semibold">High</div>
-              <div className="text-lg font-bold text-orange-400 font-mono">{activeScan.high_count}</div>
-            </div>
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
-              <div className="text-[10px] text-amber-300 uppercase font-semibold">Medium</div>
-              <div className="text-lg font-bold text-amber-300 font-mono">{activeScan.medium_count}</div>
-            </div>
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
-              <div className="text-[10px] text-emerald-400 uppercase font-semibold">Safe</div>
-              <div className="text-lg font-bold text-emerald-400 font-mono">{activeScan.safe_count}</div>
-            </div>
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
-              <div className="text-[10px] text-slate-400 uppercase font-semibold">Errors</div>
-              <div className="text-lg font-bold text-slate-400 font-mono">{activeScan.error_count}</div>
-            </div>
-          </div>
+          {/* Canonical File-Level Outcomes & Telemetry */}
+          {(() => {
+            const fileSummary = getFileOutcomeSummary(activeScan, scanFiles);
+            const findingsSummary = getFindingsSummary(scanFiles, activeScan);
+
+            return (
+              <div className="space-y-3">
+                {/* File-Level Outcomes (Guaranteed: Scanned = Passed + Failed + Review) */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 text-center">
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
+                    <div className="text-[10px] text-emerald-400 uppercase font-semibold flex items-center justify-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Files Passed
+                    </div>
+                    <div className="text-lg font-bold text-emerald-400 font-mono">{fileSummary.passed}</div>
+                    <div className="text-[10px] text-slate-500 font-mono">Clean files</div>
+                  </div>
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
+                    <div className="text-[10px] text-red-400 uppercase font-semibold flex items-center justify-center gap-1">
+                      <AlertCircle className="w-3 h-3 text-red-400" /> Files Failed
+                    </div>
+                    <div className="text-lg font-bold text-red-400 font-mono">{fileSummary.failed}</div>
+                    <div className="text-[10px] text-slate-500 font-mono">Definitive violations</div>
+                  </div>
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
+                    <div className="text-[10px] text-amber-400 uppercase font-semibold flex items-center justify-center gap-1">
+                      <AlertTriangle className="w-3 h-3 text-amber-400" /> Needs Review
+                    </div>
+                    <div className="text-lg font-bold text-amber-400 font-mono">{fileSummary.review}</div>
+                    <div className="text-[10px] text-slate-500 font-mono">Ambiguous files</div>
+                  </div>
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
+                    <div className="text-[10px] text-purple-400 uppercase font-semibold">Total Findings</div>
+                    <div className="text-lg font-bold text-purple-400 font-mono">{findingsSummary.total}</div>
+                    <div className="text-[10px] text-slate-500 font-mono">{findingsSummary.critical} Crit / {findingsSummary.high} High</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Real-time Individual File Status Persistence List */}
           <div className="space-y-4 pt-4 border-t border-slate-800">
@@ -1066,10 +1083,10 @@ export const ScanView: React.FC<ScanViewProps> = ({
               <div>
                 <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
                   <FileText className="w-4 h-4 text-emerald-400" />
-                  Individual File Persistence Status ({scanFiles.length} tracked)
+                  Individual File Outcomes & Persistence ({scanFiles.length} tracked)
                 </h4>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Every file state is saved in the SQLite database to allow instant resumption.
+                  Every file state and canonical outcome is saved in SQLite for deterministic compliance.
                 </p>
               </div>
 
@@ -1112,6 +1129,7 @@ export const ScanView: React.FC<ScanViewProps> = ({
                   <thead className="bg-slate-900 border-b border-slate-800 text-slate-400 font-semibold sticky top-0">
                     <tr>
                       <th className="p-3">File Name & Path</th>
+                      <th className="p-3">Outcome</th>
                       <th className="p-3">Status</th>
                       <th className="p-3">Size</th>
                       <th className="p-3">Classification</th>
@@ -1119,61 +1137,73 @@ export const ScanView: React.FC<ScanViewProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60">
-                    {filteredFiles.map(file => (
-                      <tr key={file.file_id || file.path} className="hover:bg-slate-900/50 transition-colors">
-                        <td className="p-3 max-w-xs truncate" title={file.path}>
-                          <div className="font-semibold text-slate-200 truncate">{file.filename}</div>
-                          <div className="text-[11px] text-slate-500 truncate">{file.path}</div>
-                        </td>
-                        <td className="p-3 whitespace-nowrap">
-                          {file.scan_status === 'SUCCESS' && (
-                            <span className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold inline-flex items-center gap-1">
-                              <CheckCircle className="w-3 h-3" /> Completed
+                    {filteredFiles.map(file => {
+                      const fileOutcome = file.file_outcome || ((file.findings_count?.critical || 0) > 0 || (file.findings_count?.high || 0) > 0 ? 'FAIL' : (file.findings_count?.medium || 0) > 0 || (file.findings_count?.low || 0) > 0 ? 'REVIEW' : 'PASS');
+                      return (
+                        <tr key={file.file_id || file.path} className="hover:bg-slate-900/50 transition-colors">
+                          <td className="p-3 max-w-xs truncate" title={file.path}>
+                            <div className="font-semibold text-slate-200 truncate">{file.filename}</div>
+                            <div className="text-[11px] text-slate-500 truncate">{file.path}</div>
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                              fileOutcome === 'PASS' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' :
+                              fileOutcome === 'FAIL' ? 'bg-rose-500/10 text-rose-400 border-rose-500/30' :
+                              'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                            }`}>
+                              {fileOutcome}
                             </span>
-                          )}
-                          {file.scan_status === 'PROCESSING' && (
-                            <span className="px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-bold inline-flex items-center gap-1 animate-pulse">
-                              <RefreshCw className="w-3 h-3 animate-spin" /> Processing
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            {file.scan_status === 'SUCCESS' && (
+                              <span className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold inline-flex items-center gap-1">
+                                <CheckCircle className="w-3 h-3" /> Completed
+                              </span>
+                            )}
+                            {file.scan_status === 'PROCESSING' && (
+                              <span className="px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-bold inline-flex items-center gap-1 animate-pulse">
+                                <RefreshCw className="w-3 h-3 animate-spin" /> Processing
+                              </span>
+                            )}
+                            {file.scan_status === 'PENDING' && (
+                              <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 text-[10px] font-bold inline-flex items-center gap-1">
+                                <Clock className="w-3 h-3" /> Pending
+                              </span>
+                            )}
+                            {file.scan_status === 'ERROR' && (
+                              <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-bold inline-flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3" /> Error
+                              </span>
+                            )}
+                            {file.scan_status === 'SKIPPED' && (
+                              <span className="px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/30 text-purple-400 text-[10px] font-bold inline-flex items-center gap-1">
+                                Skipped
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 text-slate-400 whitespace-nowrap">
+                            {formatFileSize(file.size)}
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                              file.classification === 'RESTRICTED' ? 'bg-red-500/10 text-red-400 border-red-500/30' :
+                              file.classification === 'CONFIDENTIAL' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
+                              file.classification === 'INTERNAL' ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' :
+                              'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                            }`}>
+                              {file.classification}
                             </span>
-                          )}
-                          {file.scan_status === 'PENDING' && (
-                            <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 text-[10px] font-bold inline-flex items-center gap-1">
-                              <Clock className="w-3 h-3" /> Pending
-                            </span>
-                          )}
-                          {file.scan_status === 'ERROR' && (
-                            <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-bold inline-flex items-center gap-1">
-                              <AlertCircle className="w-3 h-3" /> Error
-                            </span>
-                          )}
-                          {file.scan_status === 'SKIPPED' && (
-                            <span className="px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/30 text-purple-400 text-[10px] font-bold inline-flex items-center gap-1">
-                              Skipped
-                            </span>
-                          )}
-                        </td>
-                        <td className="p-3 text-slate-400 whitespace-nowrap">
-                          {formatFileSize(file.size)}
-                        </td>
-                        <td className="p-3 whitespace-nowrap">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                            file.classification === 'RESTRICTED' ? 'bg-red-500/10 text-red-400 border-red-500/30' :
-                            file.classification === 'CONFIDENTIAL' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
-                            file.classification === 'INTERNAL' ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' :
-                            'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                          }`}>
-                            {file.classification}
-                          </span>
-                        </td>
-                        <td className="p-3 text-slate-300 font-semibold whitespace-nowrap">
-                          {file.findings && file.findings.length > 0 ? (
-                            <span className="text-amber-400">{file.findings.length} findings</span>
-                          ) : (
-                            <span className="text-slate-500">0</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="p-3 text-slate-300 font-semibold whitespace-nowrap">
+                            {file.findings && file.findings.length > 0 ? (
+                              <span className="text-amber-400">{file.findings.length} findings</span>
+                            ) : (
+                              <span className="text-slate-500">0</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

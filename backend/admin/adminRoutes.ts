@@ -9,9 +9,9 @@ export function createAdminRouter(db: any): Router {
   const adminService = new AdminService(db);
   const pilotService = new PilotService(db);
 
-  // Apply authentication & strict SYS_ADMIN role requirement to ALL admin routes
+  // Apply authentication & strict SYS_ADMIN / SUPER_ADMIN role requirement to ALL admin routes
   router.use(authenticateRequest);
-  router.use(requireRole(['SYS_ADMIN']));
+  router.use(requireRole(['SYS_ADMIN', 'SUPER_ADMIN']));
 
   // --- CONTROLLED PILOT ADMINISTRATION ---
   router.get('/pilots', (req: Request, res: Response) => {

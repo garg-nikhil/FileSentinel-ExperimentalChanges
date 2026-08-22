@@ -15,6 +15,16 @@ import {
   EvidenceGap,
   EvidenceItem
 } from './models.js';
+import {
+  findingToDetectionResult,
+  evaluateChecklistDetections,
+  buildAffectedFiles,
+  buildDetectionExplanation,
+  mergeDetectionWithEvaluatorStatus,
+  DetectionResult,
+  DetectionResultStatus
+} from './detectionPolicy.js';
+import { aggregateFileOutcomes } from './fileOutcome.js';
 
 export interface RunAuditScanForSessionOptions {
   scanId: string;
@@ -91,7 +101,10 @@ export class EvidenceEngine {
     }
 
     const scanRow = this.db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scanId) as any;
-    if (!scanRow || scanRow.org_id !== orgId) {
+    if (!scanRow) {
+      throw new Error('Scan record not found for audit scan');
+    }
+    if (scanRow.org_id && scanRow.org_id !== orgId) {
       throw new Error('Access denied: Cross-tenant audit scan forbidden');
     }
 
@@ -202,6 +215,17 @@ export class EvidenceEngine {
       parameterResults.push(result);
     }
 
+    // ─── DETECTION-BASED EVALUATION ─────────────────────────────────
+    // Query scanner findings from the DB and apply detection policy
+    // to DET-* parameters and overlay detection awareness on existing parameters.
+    if (scanId && this.db) {
+      try {
+        await this.applyDetectionResults(scanId, parameterResults, fileExtractions);
+      } catch (err) {
+        console.error('[Audit Engine] Detection evaluation failed (non-blocking):', err);
+      }
+    }
+
     // Compute Overall Scoring and Summary
     const session = AuditScoringEngine.calculateAuditSummary(
       auditId,
@@ -227,6 +251,45 @@ export class EvidenceEngine {
     session.entityFindings = entityResolution.entityFindings;
     session.entityResolution = entityResolution;
 
+    // ─── FILE OUTCOME SUMMARY ─────────────────────────────────────────
+    if (scanId && this.db) {
+      try {
+        const fileRows = this.db.prepare('SELECT * FROM files WHERE scan_id = ?').all(scanId) as any[];
+        const filesWithFindings = fileRows.map(f => {
+          const findings = this.db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
+          return {
+            file_id: f.file_id,
+            filename: f.filename,
+            path: f.path,
+            scan_status: f.scan_status,
+            warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+            metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
+            findings
+          };
+        });
+        const { summary, details } = aggregateFileOutcomes(filesWithFindings);
+        session.file_summary = summary;
+        session.file_outcomes = details;
+        session.fileSummary = summary;
+        session.fileOutcomes = details;
+      } catch (err) {
+        console.error('[Audit Engine] File outcome aggregation failed (non-blocking):', err);
+      }
+    } else if (fileExtractions.length > 0) {
+      const synthFiles = fileExtractions.map(fe => ({
+        file_id: fe.fileId,
+        path: fe.filePath,
+        filename: fe.filePath.split(/[/\\]/).pop(),
+        scan_status: 'SUCCESS',
+        findings: []
+      }));
+      const { summary, details } = aggregateFileOutcomes(synthFiles);
+      session.file_summary = summary;
+      session.file_outcomes = details;
+      session.fileSummary = summary;
+      session.fileOutcomes = details;
+    }
+
     // If entity conflicts exist and overall status was compliant, flag that review is needed
     if (entityResolution.conflicts.length > 0 && session.overall_status === 'COMPLIANT') {
       session.overall_status = 'NEEDS_REVIEW';
@@ -235,6 +298,155 @@ export class EvidenceEngine {
     this.saveAuditSessionToDb(session);
 
     return session;
+  }
+
+  // ─── Detection-Based Evaluation ───────────────────────────────────
+
+  /** Category mapping: DET parameter ID → scanner Finding categories */
+  private static readonly DET_CATEGORY_MAP: Record<string, string[]> = {
+    'DET-001': ['PII'],
+    'DET-002': ['SECRETS'],
+    'DET-003': ['FINANCIAL'],
+    'DET-004': ['SECURITY']
+  };
+
+  /**
+   * Applies detection engine results (scanner findings) to checklist parameters.
+   *
+   * For DET-* parameters: evaluates purely from scanner findings.
+   * For existing parameters: overlays detection awareness if evidence files contain violations.
+   *
+   * Detection does NOT overwrite technical errors (EVIDENCE_NOT_FOUND, NOT_APPLICABLE).
+   * Score adjustments: FAIL → score_earned = 0, REVIEW (from PASS) → score_earned = 0
+   */
+  private async applyDetectionResults(
+    scanId: string,
+    parameterResults: AuditParameterResult[],
+    fileExtractions: { fileId: string; filePath: string; extraction: any }[]
+  ): Promise<void> {
+    // 1. Query all findings from the DB for this scan's files
+    const findingRows = this.db.prepare(`
+      SELECT f.finding_id, f.file_id, f.rule_id, f.severity, f.category, f.title,
+             f.description, f.evidence_json, f.confidence, f.source,
+             fi.filename, fi.path, fi.scan_status
+      FROM findings f
+      JOIN files fi ON f.file_id = fi.file_id
+      WHERE fi.scan_id = ?
+    `).all(scanId) as any[];
+
+    if (!findingRows || findingRows.length === 0) {
+      // No findings at all — all DET-* parameters get PASS
+      for (const result of parameterResults) {
+        if (result.parameter_id.startsWith('DET-')) {
+          result.status = 'PASS';
+          result.confidence = 1.0;
+          result.score_earned = result.max_score;
+          result.reason = 'No matching sensitive data was detected in the scanned files.';
+          result.detection_results = {
+            status: 'PASS',
+            affected_files: [],
+            explanation: 'No matching PII or sensitive data was detected in the scanned files.'
+          };
+        }
+      }
+      return;
+    }
+
+    // 2. Convert DB finding rows into DetectionResult[]
+    const allDetections: DetectionResult[] = findingRows.map(row =>
+      findingToDetectionResult(row, row.filename || 'unknown')
+    );
+
+    // 3. Group detections by category for DET-* parameter evaluation
+    const detectionsByCategory = new Map<string, DetectionResult[]>();
+    for (const d of allDetections) {
+      const cat = d.classification;
+      if (!detectionsByCategory.has(cat)) {
+        detectionsByCategory.set(cat, []);
+      }
+      detectionsByCategory.get(cat)!.push(d);
+    }
+
+    // 4. Evaluate DET-* parameters from scanner findings
+    for (const result of parameterResults) {
+      if (!result.parameter_id.startsWith('DET-')) continue;
+
+      const targetCategories = EvidenceEngine.DET_CATEGORY_MAP[result.parameter_id] || [];
+      const relevantDetections: DetectionResult[] = [];
+
+      for (const cat of targetCategories) {
+        const catDetections = detectionsByCategory.get(cat) || [];
+        relevantDetections.push(...catDetections);
+      }
+
+      const detStatus = evaluateChecklistDetections(relevantDetections);
+      const affectedFiles = buildAffectedFiles(relevantDetections);
+      const explanation = buildDetectionExplanation(detStatus, affectedFiles);
+
+      // Set the authoritative result
+      result.status = detStatus;
+      result.confidence = detStatus === 'PASS' ? 1.0 : (detStatus === 'FAIL' ? 0.95 : 0.80);
+      result.score_earned = detStatus === 'PASS' ? result.max_score : 0;
+      result.reason = explanation;
+      result.evidence = []; // DET-* parameters don't use evidence-matching
+      result.missing_requirements = [];
+      result.warnings = detStatus !== 'PASS'
+        ? [`Detection engine found ${relevantDetections.length} relevant finding(s)`]
+        : [];
+
+      result.detection_results = {
+        status: detStatus,
+        affected_files: affectedFiles,
+        explanation
+      };
+    }
+
+    // 5. Overlay detection awareness on existing (non-DET) parameters
+    // If a file matched to an existing parameter also has violations, attach detection info
+    for (const result of parameterResults) {
+      if (result.parameter_id.startsWith('DET-')) continue;
+
+      // Find files that are evidence for this parameter
+      const evidenceFileIds = new Set(
+        result.evidence.map(e => e.file_id).filter(Boolean)
+      );
+
+      if (evidenceFileIds.size === 0) continue;
+
+      // Find detections in those specific evidence files
+      const evidenceDetections = allDetections.filter(d => {
+        // Match by filename against evidence filenames
+        return result.evidence.some(e =>
+          e.filename === d.filename || e.file_id === d.filename
+        );
+      });
+
+      if (evidenceDetections.length === 0) continue;
+
+      const detStatus = evaluateChecklistDetections(evidenceDetections);
+      const affectedFiles = buildAffectedFiles(evidenceDetections);
+      const explanation = buildDetectionExplanation(detStatus, affectedFiles);
+
+      // Attach detection results for UI display
+      result.detection_results = {
+        status: detStatus,
+        affected_files: affectedFiles,
+        explanation
+      };
+
+      // Merge with existing status (FAIL > REVIEW > PASS, technical errors preserved)
+      const mergedStatus = mergeDetectionWithEvaluatorStatus(result.status, detStatus);
+      if (mergedStatus !== result.status) {
+        result.warnings = [
+          ...(result.warnings || []),
+          `Detection engine elevated status from ${result.status} to ${mergedStatus}`
+        ];
+        result.status = mergedStatus as any;
+        if (mergedStatus === 'FAIL' || mergedStatus === 'REVIEW') {
+          result.score_earned = 0;
+        }
+      }
+    }
   }
 
   /**

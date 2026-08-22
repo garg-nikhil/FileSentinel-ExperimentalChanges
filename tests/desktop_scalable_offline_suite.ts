@@ -444,8 +444,10 @@ async function runScalableOfflineTestSuite() {
 
   // Cleanup
   db.close();
-  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
-  if (fs.existsSync(tempTestDir)) fs.rmSync(tempTestDir, { recursive: true, force: true });
+  try {
+    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+    if (fs.existsSync(tempTestDir)) fs.rmSync(tempTestDir, { recursive: true, force: true, maxRetries: 5 });
+  } catch {}
 
   console.log('\n========================================================================');
   console.log(`  ALL ${passedTests}/${totalTests} TESTS PASSED PERFECTLY (100% SUCCESS)`);

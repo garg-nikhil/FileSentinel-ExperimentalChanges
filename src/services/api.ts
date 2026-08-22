@@ -5,7 +5,8 @@ import {
   Finding,
   QuarantineItem,
   Rule,
-  ScanSession
+  ScanSession,
+  AuthUser
 } from '../types.js';
 
 let memoryToken: string | null = typeof window !== 'undefined' ? localStorage.getItem('filesentinel_token') : null;
@@ -13,7 +14,11 @@ let memoryToken: string | null = typeof window !== 'undefined' ? localStorage.ge
 export function getAuthToken(): string | null {
   if (memoryToken) return memoryToken;
   if (typeof window !== 'undefined') {
-    return localStorage.getItem('filesentinel_token');
+    const stored = localStorage.getItem('filesentinel_token');
+    if (stored) {
+      memoryToken = stored;
+      return stored;
+    }
   }
   return null;
 }
@@ -31,54 +36,29 @@ export function setAuthToken(token: string | null) {
 
 export async function ensureAuthenticated(): Promise<string> {
   const existingToken = getAuthToken();
-  if (existingToken) {
-    try {
-      const res = await fetch('/api/auth/me', {
-        headers: { 'Authorization': `Bearer ${existingToken}` }
-      });
-      if (res.ok) {
-        return existingToken;
-      }
-    } catch {
-      // Ignore network errors
-    }
-  }
+  if (!existingToken) return '';
 
-  // Attempt login using dev credentials if dev mode is active on backend
   try {
-    const loginRes = await fetch('/api/auth/login', {
-      method: 'POST',
+    const res = await fetch('/api/auth/me', {
       headers: {
-        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${existingToken}`,
         'X-Requested-With': 'XMLHttpRequest',
         'X-CSRF-Token': 'filesentinel-client'
-      },
-      body: JSON.stringify({
-        username: 'devadmin',
-        password: 'devpassword',
-        device_id: 'dev-device-default'
-      })
-    });
-    if (loginRes.ok) {
-      const data = await loginRes.json();
-      if (data.token) {
-        setAuthToken(data.token);
-        return data.token;
       }
+    });
+    if (res.ok) {
+      return existingToken;
     }
-  } catch (err) {
-    console.error('[AuthBootstrap] Failed to establish session:', err);
+    // Token is invalid/expired
+    setAuthToken(null);
+    return '';
+  } catch {
+    return existingToken;
   }
-
-  return '';
 }
 
 async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  let token = getAuthToken();
-  if (!token) {
-    token = await ensureAuthenticated();
-  }
-
+  const token = getAuthToken();
   const headers = new Headers(options.headers || {});
   headers.set('X-Requested-With', 'XMLHttpRequest');
   headers.set('X-CSRF-Token', 'filesentinel-client');
@@ -86,37 +66,11 @@ async function authFetch(url: string, options: RequestInit = {}): Promise<Respon
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  let res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, { ...options, headers });
 
-  if (res.status === 401) {
-    // Attempt token rotation or re-authentication
-    if (token) {
-      try {
-        const rotateRes = await fetch('/api/auth/rotate-token', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'X-Requested-With': 'XMLHttpRequest',
-            'X-CSRF-Token': 'filesentinel-client'
-          }
-        });
-        if (rotateRes.ok) {
-          const rotateData = await rotateRes.json();
-          if (rotateData.token) {
-            setAuthToken(rotateData.token);
-            token = rotateData.token;
-            headers.set('Authorization', `Bearer ${token}`);
-            return await fetch(url, { ...options, headers });
-          }
-        }
-      } catch {}
-    }
-
-    const newToken = await ensureAuthenticated();
-    if (newToken && newToken !== token) {
-      headers.set('Authorization', `Bearer ${newToken}`);
-      return await fetch(url, { ...options, headers });
-    }
+  if (res.status === 401 && token) {
+    // Current token was rejected by server as expired/invalid
+    setAuthToken(null);
   }
 
   return res;
@@ -130,7 +84,11 @@ export const api = {
   async login(username: string, password: string, device_id?: string) {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-CSRF-Token': 'filesentinel-client'
+      },
       body: JSON.stringify({ username, password, device_id })
     });
     if (!res.ok) {
@@ -146,8 +104,21 @@ export const api = {
 
   async logout() {
     try {
-      await authFetch('/api/auth/logout', { method: 'POST' });
+      const token = getAuthToken();
+      if (token) {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-CSRF-Token': 'filesentinel-client'
+          }
+        }).catch(() => {});
+      }
     } finally {
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('filesentinel_view_role');
+      }
       setAuthToken(null);
     }
   },
@@ -787,6 +758,33 @@ export const api = {
     const res = await authFetch('/api/license/clock-monitor/logs');
     if (!res.ok) {
       throw new Error('Failed to fetch clock monitor forensic logs');
+    }
+    return res.json();
+  },
+
+  async getMe(): Promise<AuthUser | null> {
+    try {
+      const res = await authFetch('/api/auth/me');
+      if (!res.ok) return null;
+      return res.json();
+    } catch {
+      return null;
+    }
+  },
+
+  async switchRole(targetRole: string): Promise<any> {
+    return this.switchRoleView(targetRole);
+  },
+
+  async switchRoleView(targetRole: string): Promise<any> {
+    const res = await authFetch('/api/auth/switch-role-view', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: targetRole })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to switch role view');
     }
     return res.json();
   }
