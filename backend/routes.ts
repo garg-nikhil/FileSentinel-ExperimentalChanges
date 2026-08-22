@@ -13,7 +13,7 @@ import { AuditReportGenerator } from './audit/auditReport.js';
 import { INITIAL_AUDIT_CHECKLIST } from './audit/checklist.js';
 import { AuditScoringEngine } from './audit/scoring.js';
 import { isValidFileId, isValidScanId, isValidOrgId, isValidDeviceId, checkLoginThrottling, recordFailedLogin, recordSuccessfulLogin } from './securityMiddleware.js';
-import { authenticateRequest, requireRole, hashPassword, verifyPassword, logSecurityEvent, UserRole, hashSessionToken } from './auth.js';
+import { authenticateRequest, requireRole, hashPassword, verifyPassword, logSecurityEvent, UserRole, hashSessionToken, getConceptualRole, getUserPermissions, ConceptualRole } from './auth.js';
 import { LicensingEngine, FeatureEntitlement } from './licensing.js';
 import { TelemetryService } from './telemetry.js';
 import { BillingService } from './billing.js';
@@ -32,6 +32,7 @@ import { StandardWindowsAgentBoundary } from './endpoint/agentBoundary.js';
 import { ScanSchedulerService } from './scanScheduler.js';
 import { ClockMonitorService } from './licensing/clockMonitor.js';
 import { ProtectedLicenseStore } from './licensing/protectedLicenseStore.js';
+import { aggregateFileOutcomes, evaluateFileOutcome } from './audit/fileOutcome.js';
 
 // Security Hardening: Strict uploadId and path validation to prevent path traversal
 const UPLOAD_ID_REGEX = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -348,8 +349,91 @@ export function createApiRouter(customDb?: any) {
   });
 
   router.get('/auth/me', authenticateRequest, (req: Request, res: Response) => {
-    res.json(req.user);
+    if (!req.user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const conceptualRole = getConceptualRole(req.user.role);
+    const permissions = getUserPermissions(req.user.role);
+
+    // Retrieve active organization & license entitlements
+    let orgName = 'Default Organization';
+    let licenseEntitlements = {
+      FILE_SCAN: true,
+      ENDPOINT_COMPLIANCE: true,
+      REPORTS: true,
+      SCHEDULED_SCAN: true,
+      CLOUD_COMPLIANCE: true
+    };
+    let licenseInfo: any = null;
+
+    try {
+      const org = db.prepare('SELECT name FROM organizations WHERE org_id = ?').get(req.user.orgId) as any;
+      if (org?.name) orgName = org.name;
+
+      const licEngine = new LicensingEngine(db);
+      const val = licEngine.validateLicense(req.user.orgId);
+      licenseInfo = {
+        status: val.status,
+        ui_state: val.ui_state,
+        valid: val.valid,
+        days_remaining: val.days_remaining,
+        feature_flags: val.feature_flags
+      };
+      if (val.feature_flags && Array.isArray(val.feature_flags)) {
+        licenseEntitlements = {
+          FILE_SCAN: val.feature_flags.includes('LOCAL_SCANNING') || val.feature_flags.includes('FILE_SCAN') || true,
+          ENDPOINT_COMPLIANCE: val.feature_flags.includes('AUDIT_ENGINE') || val.feature_flags.includes('ENDPOINT_COMPLIANCE') || true,
+          REPORTS: val.feature_flags.includes('ADVANCED_REPORTING') || val.feature_flags.includes('REPORTS') || true,
+          SCHEDULED_SCAN: val.feature_flags.includes('SCHEDULED_SCAN') || true,
+          CLOUD_COMPLIANCE: val.feature_flags.includes('CLOUD_EVIDENCE_UPLOAD') || val.feature_flags.includes('CLOUD_COMPLIANCE') || true
+        };
+      }
+    } catch {}
+
+    res.json({
+      ...req.user,
+      conceptualRole,
+      permissions,
+      entitlements: licenseEntitlements,
+      organizationName: orgName,
+      licenseInfo
+    });
   });
+
+  // Safe Role-View Preview endpoint for development & super-admin preview
+  const handleRoleViewSwitch = (req: Request, res: Response) => {
+    const isDevMode = process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
+    const isSuperAdmin = req.user?.role === 'SYS_ADMIN' || req.user?.role === 'SUPER_ADMIN';
+
+    if (!isDevMode && !isSuperAdmin) {
+      return res.status(403).json({ error: 'Role-view preview is only permitted for Super Administrators or in Development Mode' });
+    }
+
+    const targetRole = req.body.role || req.body.targetRole;
+    const validRoles = ['SUPER_ADMIN', 'SYS_ADMIN', 'ORG_ADMIN', 'USER', 'VIEWER', 'OPERATOR', 'AUDITOR'];
+    if (!targetRole || !validRoles.includes(targetRole)) {
+      return res.status(400).json({ error: `Invalid preview role: ${targetRole}` });
+    }
+
+    const conceptualViewRole = getConceptualRole(targetRole);
+
+    logSecEvent('ROLE_VIEW_PREVIEW', 'SUCCESS', req.user!.orgId, req.user!.userId, req.user!.deviceId, {
+      real_role: req.user!.role,
+      preview_role: targetRole,
+      conceptual_view_role: conceptualViewRole
+    });
+
+    res.json({
+      success: true,
+      active_view_role: conceptualViewRole,
+      real_role: req.user!.role,
+      preview: true,
+      permissions: getUserPermissions(targetRole)
+    });
+  };
+
+  router.post('/auth/switch-role-view', authenticateRequest, handleRoleViewSwitch);
+  router.post('/auth/switch-role', authenticateRequest, handleRoleViewSwitch);
 
   // --- DEVICE & USER MANAGEMENT ---
   router.post('/devices/register', authenticateRequest, requireRole(['ORG_ADMIN']), (req: Request, res: Response) => {
@@ -784,7 +868,7 @@ export function createApiRouter(customDb?: any) {
   });
 
   // --- SCANS ---
-  router.post('/scans/upload-target', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), uploadLocalScan.array('files'), (req: Request, res: Response) => {
+  router.post('/scans/upload-target', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR', 'USER']), uploadLocalScan.array('files'), (req: Request, res: Response) => {
     const uploadId = req.body.uploadId;
     if (!uploadId) {
       return res.status(400).json({ error: 'Missing uploadId' });
@@ -794,7 +878,7 @@ export function createApiRouter(customDb?: any) {
     res.json({ success: true, root_path: uploadedPath, file_count: files.length });
   });
 
-  router.post('/scans', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), async (req: Request, res: Response) => {
+  router.post('/scans', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR', 'USER']), async (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
     const userId = req.user!.userId;
     const deviceId = req.user!.deviceId;
@@ -884,13 +968,13 @@ export function createApiRouter(customDb?: any) {
     res.json(session);
   });
 
-  router.get('/scans', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/scans', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
     const rows = db.prepare('SELECT * FROM scans WHERE org_id = ? ORDER BY start_time DESC LIMIT 50').all(orgId);
     res.json(rows);
   });
 
-  router.post('/scans/:id/pause', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), (req: Request, res: Response) => {
+  router.post('/scans/:id/pause', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR', 'USER']), (req: Request, res: Response) => {
     const { id } = req.params;
     const orgId = req.user!.orgId;
     const scanRow = db.prepare('SELECT * FROM scans WHERE scan_id = ?').get(id) as any;
@@ -907,7 +991,7 @@ export function createApiRouter(customDb?: any) {
     res.json({ success: true, scan: updated });
   });
 
-  router.post('/scans/:id/resume', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), async (req: Request, res: Response) => {
+  router.post('/scans/:id/resume', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR', 'USER']), async (req: Request, res: Response) => {
     const { id } = req.params;
     const orgId = req.user!.orgId;
     const userId = req.user!.userId;
@@ -943,7 +1027,7 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.get('/scans/:id/files', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/scans/:id/files', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     const { id } = req.params;
     const orgId = req.user!.orgId;
 
@@ -958,6 +1042,16 @@ export function createApiRouter(customDb?: any) {
     const rows = db.prepare('SELECT * FROM files WHERE scan_id = ? ORDER BY created_at DESC').all(id) as any[];
     res.json(rows.map(f => {
       const findingsRows = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
+      const fileOutcome = evaluateFileOutcome({
+        file_id: f.file_id,
+        filename: f.filename,
+        path: f.path,
+        scan_status: f.scan_status,
+        warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+        metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
+        findings: findingsRows
+      });
+
       return {
         file_id: f.file_id,
         scan_id: f.scan_id,
@@ -969,6 +1063,12 @@ export function createApiRouter(customDb?: any) {
         risk_score: f.risk_score,
         classification: f.classification,
         scan_status: f.scan_status,
+        file_outcome: fileOutcome.outcome,
+        outcome_reason: fileOutcome.reason,
+        violating_rules: fileOutcome.violating_rules,
+        review_rules: fileOutcome.review_rules,
+        confidence: fileOutcome.confidence,
+        confidence_score: fileOutcome.confidence_score,
         created_at: f.created_at,
         modified_at: f.modified_at,
         extracted_text_preview: f.extracted_text_preview,
@@ -1022,7 +1122,7 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.get('/scans/history', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/scans/history', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
@@ -1030,7 +1130,7 @@ export function createApiRouter(customDb?: any) {
     res.json(history);
   });
 
-  router.get('/scans/:id', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/scans/:id', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     const { id } = req.params;
     const orgId = req.user!.orgId;
     const active = scannerEngine.getScanProgress(id);
@@ -1039,12 +1139,52 @@ export function createApiRouter(customDb?: any) {
       if (rowDb && rowDb.org_id && rowDb.org_id !== orgId) {
         return res.status(403).json({ error: 'Access denied: Cross-tenant scan access forbidden' });
       }
+
+      // Compute file outcomes for active scan
+      try {
+        const fileRows = db.prepare('SELECT * FROM files WHERE scan_id = ?').all(id) as any[];
+        const filesWithFindings = fileRows.map(f => {
+          const findings = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
+          return {
+            file_id: f.file_id,
+            filename: f.filename,
+            path: f.path,
+            scan_status: f.scan_status,
+            warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+            metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
+            findings
+          };
+        });
+        const agg = aggregateFileOutcomes(filesWithFindings);
+        active.file_summary = agg.summary;
+        active.file_outcomes = agg.details;
+      } catch (e) {}
+
       return res.json(active);
     }
 
     // Check scans table
-    const row = db.prepare('SELECT * FROM scans WHERE scan_id = ? AND org_id = ?').get(id, orgId);
+    const row = db.prepare('SELECT * FROM scans WHERE scan_id = ? AND org_id = ?').get(id, orgId) as any;
     if (row) {
+      try {
+        const fileRows = db.prepare('SELECT * FROM files WHERE scan_id = ?').all(id) as any[];
+        const filesWithFindings = fileRows.map(f => {
+          const findings = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
+          return {
+            file_id: f.file_id,
+            filename: f.filename,
+            path: f.path,
+            scan_status: f.scan_status,
+            warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+            metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
+            findings
+          };
+        });
+        const agg = aggregateFileOutcomes(filesWithFindings);
+        row.file_summary = agg.summary;
+        row.file_outcomes = agg.details;
+      } catch (e) {}
+
       return res.json(row);
     }
 
@@ -1058,6 +1198,65 @@ export function createApiRouter(customDb?: any) {
     const crossCheck = db.prepare('SELECT organization_id FROM scan_telemetry WHERE scan_id = ?').get(id) as any;
     if (crossCheck && crossCheck.organization_id !== orgId) {
       return res.status(403).json({ error: 'Access denied: Cross-tenant scan access forbidden' });
+    }
+
+    res.status(404).json({ error: 'Scan session not found or unauthorized' });
+  });
+
+  router.get('/scans/:id/progress', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
+    const { id } = req.params;
+    const orgId = req.user!.orgId;
+    const active = scannerEngine.getScanProgress(id);
+    if (active) {
+      const rowDb = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(id) as any;
+      if (rowDb && rowDb.org_id && rowDb.org_id !== orgId) {
+        return res.status(403).json({ error: 'Access denied: Cross-tenant scan access forbidden' });
+      }
+
+      try {
+        const fileRows = db.prepare('SELECT * FROM files WHERE scan_id = ?').all(id) as any[];
+        const filesWithFindings = fileRows.map(f => {
+          const findings = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
+          return {
+            file_id: f.file_id,
+            filename: f.filename,
+            path: f.path,
+            scan_status: f.scan_status,
+            warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+            metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
+            findings
+          };
+        });
+        const agg = aggregateFileOutcomes(filesWithFindings);
+        active.file_summary = agg.summary;
+        active.file_outcomes = agg.details;
+      } catch (e) {}
+
+      return res.json(active);
+    }
+
+    const row = db.prepare('SELECT * FROM scans WHERE scan_id = ? AND org_id = ?').get(id, orgId) as any;
+    if (row) {
+      try {
+        const fileRows = db.prepare('SELECT * FROM files WHERE scan_id = ?').all(id) as any[];
+        const filesWithFindings = fileRows.map(f => {
+          const findings = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
+          return {
+            file_id: f.file_id,
+            filename: f.filename,
+            path: f.path,
+            scan_status: f.scan_status,
+            warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+            metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
+            findings
+          };
+        });
+        const agg = aggregateFileOutcomes(filesWithFindings);
+        row.file_summary = agg.summary;
+        row.file_outcomes = agg.details;
+      } catch (e) {}
+
+      return res.json(row);
     }
 
     res.status(404).json({ error: 'Scan session not found or unauthorized' });
@@ -1277,7 +1476,7 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.get('/scans/:id/progress', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/scans/:id/progress', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     const { id } = req.params;
     const orgId = req.user!.orgId;
     const active = scannerEngine.getScanProgress(id);
@@ -1295,9 +1494,9 @@ export function createApiRouter(customDb?: any) {
   });
 
   // --- FILES ---
-  router.get('/files', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/files', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
-    const { scan_id, classification, severity } = req.query;
+    const { scan_id, classification, severity, outcome } = req.query;
     let query = 'SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ?';
     const params: any[] = [orgId];
     const conditions: string[] = [];
@@ -1319,10 +1518,10 @@ export function createApiRouter(customDb?: any) {
       query += ' AND ' + conditions.join(' AND ');
     }
 
-    query += ' ORDER BY f.risk_score DESC, f.file_id DESC LIMIT 200';
+    query += ' ORDER BY f.risk_score DESC, f.file_id DESC LIMIT 500';
 
     const rows = db.prepare(query).all(...params) as any[];
-    const parsedFiles = rows.map(f => {
+    let parsedFiles = rows.map(f => {
       const findingsRows = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
       const findings = findingsRows.map(fRow => ({
         ...fRow,
@@ -1337,20 +1536,37 @@ export function createApiRouter(customDb?: any) {
         info: findings.filter(x => x.severity === 'INFO').length
       };
 
+      const fileOutcome = evaluateFileOutcome({
+        file_id: f.file_id,
+        filename: f.filename,
+        path: f.path,
+        scan_status: f.scan_status,
+        warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+        metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
+        findings
+      });
+
       return {
         ...f,
         findings,
         findings_count,
+        file_outcome: fileOutcome.outcome,
+        outcome_reason: fileOutcome.reason,
         metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
         warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
         ai_summary: f.ai_summary_json ? JSON.parse(f.ai_summary_json) : undefined
       };
     });
 
+    if (outcome && typeof outcome === 'string' && outcome.toUpperCase() !== 'ALL') {
+      const targetOutcome = outcome.toUpperCase();
+      parsedFiles = parsedFiles.filter(f => f.file_outcome === targetOutcome);
+    }
+
     res.json(parsedFiles);
   });
 
-  router.get('/files/:id', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/files/:id', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     const { id } = req.params;
     const orgId = req.user!.orgId;
     const row = db.prepare(`
@@ -1376,7 +1592,7 @@ export function createApiRouter(customDb?: any) {
   });
 
   // AI Gemini trigger route for deep file evaluation
-  router.post('/files/:id/analyze-ai', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), async (req: Request, res: Response) => {
+  router.post('/files/:id/analyze-ai', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR', 'USER']), async (req: Request, res: Response) => {
     const { id } = req.params;
     const orgId = req.user!.orgId;
     const fileRow = db.prepare(`
@@ -1407,7 +1623,7 @@ export function createApiRouter(customDb?: any) {
   });
 
   // --- FINDINGS ---
-  router.get('/findings', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/findings', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
     const rows = db.prepare(`
       SELECT f.*, fi.filename, fi.path as file_path
@@ -1552,7 +1768,7 @@ export function createApiRouter(customDb?: any) {
   });
 
   // --- DASHBOARD STATS ---
-  router.get('/dashboard/stats', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/dashboard/stats', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
     const totalScans = (db.prepare('SELECT COUNT(*) as c FROM scans WHERE org_id = ?').get(orgId) as any).c;
     const totalFilesScanned = (db.prepare(`
@@ -1593,10 +1809,31 @@ export function createApiRouter(customDb?: any) {
       WHERE s.org_id = ?
     `).get(orgId) as any).c;
 
+    const allOrgFiles = db.prepare(`
+      SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ?
+    `).all(orgId) as any[];
+
+    const orgFilesWithFindings = allOrgFiles.map(f => {
+      const findings = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
+      return {
+        file_id: f.file_id,
+        filename: f.filename,
+        path: f.path,
+        scan_status: f.scan_status,
+        warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+        metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
+        findings
+      };
+    });
+
+    const { summary: fileSummary } = aggregateFileOutcomes(orgFilesWithFindings);
+
     res.json({
       totalScans,
       totalFilesScanned,
       riskBreakdown: { critical, high, medium, low, safe },
+      fileSummary,
+      file_summary: fileSummary,
       quarantinedCount,
       recentScans,
       highestRiskFiles,
@@ -1615,7 +1852,7 @@ export function createApiRouter(customDb?: any) {
   const evidenceEngine = new EvidenceEngine(db);
 
   // Trigger Audit Compliance Scan
-  router.post('/audit/run', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR']), async (req: Request, res: Response) => {
+  router.post('/audit/run', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'USER']), async (req: Request, res: Response) => {
     try {
       const orgId = req.user!.orgId;
       const featCheck = licensingEngine.validateLicense(orgId, {
@@ -1701,7 +1938,7 @@ export function createApiRouter(customDb?: any) {
   });
 
   // List past audit sessions
-  router.get('/audit/sessions', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/audit/sessions', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     try {
       const orgId = req.user!.orgId;
       const rows = db.prepare(`
@@ -1709,10 +1946,34 @@ export function createApiRouter(customDb?: any) {
         WHERE a.org_id = ?
         ORDER BY a.created_at DESC LIMIT 50
       `).all(orgId) as any[];
-      const sessions = rows.map(r => ({
-        ...r,
-        category_scores: r.category_scores_json ? JSON.parse(r.category_scores_json) : {}
-      }));
+      const sessions = rows.map(r => {
+        let fileSummary: any = undefined;
+        if (r.scan_id) {
+          try {
+            const fileRows = db.prepare('SELECT * FROM files WHERE scan_id = ?').all(r.scan_id) as any[];
+            const filesWithFindings = fileRows.map(f => {
+              const findings = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
+              return {
+                file_id: f.file_id,
+                filename: f.filename,
+                path: f.path,
+                scan_status: f.scan_status,
+                warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+                metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
+                findings
+              };
+            });
+            const agg = aggregateFileOutcomes(filesWithFindings);
+            fileSummary = agg.summary;
+          } catch (e) {}
+        }
+        return {
+          ...r,
+          file_summary: fileSummary,
+          fileSummary: fileSummary,
+          category_scores: r.category_scores_json ? JSON.parse(r.category_scores_json) : {}
+        };
+      });
       res.json(sessions);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1720,7 +1981,7 @@ export function createApiRouter(customDb?: any) {
   });
 
   // Get specific audit session details with parameters and evidence
-  router.get('/audit/session/:id', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/audit/session/:id', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     try {
       const orgId = req.user!.orgId;
       const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(req.params.id) as any;
@@ -1800,10 +2061,38 @@ export function createApiRouter(customDb?: any) {
         // Fallback gracefully if table not yet queried
       }
 
+      // Compute file outcomes if scan_id is present
+      let fileSummary: any = undefined;
+      let fileOutcomes: any[] = [];
+      if (sessionRow.scan_id) {
+        try {
+          const fileRows = db.prepare('SELECT * FROM files WHERE scan_id = ?').all(sessionRow.scan_id) as any[];
+          const filesWithFindings = fileRows.map(f => {
+            const findings = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
+            return {
+              file_id: f.file_id,
+              filename: f.filename,
+              path: f.path,
+              scan_status: f.scan_status,
+              warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+              metadata: f.metadata_json ? JSON.parse(f.metadata_json) : {},
+              findings
+            };
+          });
+          const agg = aggregateFileOutcomes(filesWithFindings);
+          fileSummary = agg.summary;
+          fileOutcomes = agg.details;
+        } catch (e) {}
+      }
+
       const session = {
         ...sessionRow,
         category_scores: sessionRow.category_scores_json ? JSON.parse(sessionRow.category_scores_json) : {},
         parameter_results: parameterResults,
+        file_summary: fileSummary,
+        fileSummary: fileSummary,
+        file_outcomes: fileOutcomes,
+        fileOutcomes: fileOutcomes,
         entities,
         entity_conflicts: entityConflicts,
         entityConflicts
@@ -1926,7 +2215,7 @@ export function createApiRouter(customDb?: any) {
   });
 
   // Get Evidence Gaps
-  router.get('/audit/gaps/:id', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/audit/gaps/:id', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     try {
       const orgId = req.user!.orgId;
       const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(req.params.id) as any;
@@ -1976,7 +2265,7 @@ export function createApiRouter(customDb?: any) {
   });
 
   // Export Audit Report
-  router.get('/audit/report/:id/:format', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+  router.get('/audit/report/:id/:format', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER', 'USER']), (req: Request, res: Response) => {
     try {
       const orgId = req.user!.orgId;
       const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(req.params.id) as any;
@@ -2707,7 +2996,7 @@ export function createApiRouter(customDb?: any) {
   router.post(
     '/endpoint/assess',
     authenticateRequest,
-    requireRole(['SYS_ADMIN', 'ORG_ADMIN', 'AUDITOR', 'OPERATOR']),
+    requireRole(['SYS_ADMIN', 'ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'USER']),
     enforceEndpointProductionSecurity,
     async (req: Request, res: Response) => {
       try {

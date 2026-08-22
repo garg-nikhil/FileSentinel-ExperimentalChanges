@@ -72,6 +72,12 @@ export function getDatabase(dbPath?: string): DatabaseSync {
       throw new Error('FATAL: Derived encryption key is not valid hex. Refusing to initialize database. Fail-closed enforced.');
     }
     db.exec(`PRAGMA key = '${keyHex}';`);
+    db.exec('PRAGMA busy_timeout = 5000;');
+    try {
+      db.exec('PRAGMA journal_mode = WAL;');
+    } catch {
+      // Memory or restricted environments fallback
+    }
 
     // Verify DB integrity and fail closed on authentication/decryption failure
     try {
@@ -821,6 +827,13 @@ export function getDatabase(dbPath?: string): DatabaseSync {
       const devHash = `${saltBuf.toString('hex')}:${hashBuf.toString('hex')}`;
       db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(defaultUserId, defaultOrgId, 'devadmin', devHash, 'ORG_ADMIN', now);
 
+      const stdUserId = 'user-standard-dev';
+      const stdSaltBuf = crypto.randomBytes(16);
+      const stdPassBuf = Buffer.from('userpassword', 'utf8');
+      const stdHashBuf = crypto.scryptSync(stdPassBuf, stdSaltBuf, 64);
+      const stdHash = `${stdSaltBuf.toString('hex')}:${stdHashBuf.toString('hex')}`;
+      db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(stdUserId, defaultOrgId, 'user', stdHash, 'USER', now);
+
       const defaultDeviceId = 'dev-device-default';
       db.prepare('INSERT OR IGNORE INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, 0, ?)').run(defaultDeviceId, defaultOrgId, 'Default Local Device', now);
 
@@ -832,6 +845,7 @@ export function getDatabase(dbPath?: string): DatabaseSync {
       const sysHash = `${sysSalt.toString('hex')}:${sysHashBuf.toString('hex')}`;
       db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, suspended, created_at) VALUES (?, ?, 0, ?)').run(sysOrgId, 'FileSentinel Internal Administration', now);
       db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(sysUserId, sysOrgId, 'sysadmin', sysHash, 'SYS_ADMIN', now);
+      db.prepare('INSERT OR IGNORE INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, 0, ?)').run(defaultDeviceId, sysOrgId, 'Default SysAdmin Device', now);
     }
 
     // Seed default plans
@@ -884,6 +898,13 @@ export function getDatabase(dbPath?: string): DatabaseSync {
       const hashBuf = crypto.scryptSync(passBuf, saltBuf, 64);
       const defaultHash = `${saltBuf.toString('hex')}:${hashBuf.toString('hex')}`;
       db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(defaultUserId, defaultOrgId, 'devadmin', defaultHash, 'ORG_ADMIN', now);
+
+      const stdUserId = 'user-standard-dev';
+      const stdSaltBuf = crypto.randomBytes(16);
+      const stdPassBuf = Buffer.from('userpassword', 'utf8');
+      const stdHashBuf = crypto.scryptSync(stdPassBuf, stdSaltBuf, 64);
+      const stdHash = `${stdSaltBuf.toString('hex')}:${stdHashBuf.toString('hex')}`;
+      db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(stdUserId, defaultOrgId, 'user', stdHash, 'USER', now);
 
       const defaultDeviceId = 'dev-device-default';
       db.prepare('INSERT OR IGNORE INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, 0, ?)').run(defaultDeviceId, defaultOrgId, 'Default Development Device', now);

@@ -86,7 +86,68 @@ export function verifyIpcJwt(token: string, secret: string): any {
   }
 }
 
-export type UserRole = 'SYS_ADMIN' | 'ORG_ADMIN' | 'AUDITOR' | 'OPERATOR' | 'VIEWER';
+export type UserRole = 'SYS_ADMIN' | 'SUPER_ADMIN' | 'ORG_ADMIN' | 'AUDITOR' | 'OPERATOR' | 'VIEWER' | 'USER';
+
+export type ConceptualRole = 'SUPER_ADMIN' | 'ORG_ADMIN' | 'USER';
+
+export function getConceptualRole(role: UserRole | string): ConceptualRole {
+  if (role === 'SYS_ADMIN' || role === 'SUPER_ADMIN') {
+    return 'SUPER_ADMIN';
+  }
+  if (role === 'ORG_ADMIN') {
+    return 'ORG_ADMIN';
+  }
+  return 'USER';
+}
+
+export function getUserPermissions(role: UserRole | string): string[] {
+  const conceptual = getConceptualRole(role);
+  if (conceptual === 'SUPER_ADMIN') {
+    return [
+      'SCAN_FILES',
+      'VIEW_SCAN_RESULTS',
+      'VIEW_SCAN_HISTORY',
+      'VIEW_REPORTS',
+      'CHECK_ENDPOINT_COMPLIANCE',
+      'MANAGE_ORGANIZATION',
+      'MANAGE_USERS',
+      'MANAGE_DEVICES',
+      'VIEW_ORG_TELEMETRY',
+      'SYSTEM_ADMIN',
+      'MANAGE_PILOTS',
+      'GLOBAL_TELEMETRY',
+      'GLOBAL_LICENSING',
+      'SYSTEM_SETTINGS',
+      'DIAGNOSTICS'
+    ];
+  }
+  if (conceptual === 'ORG_ADMIN') {
+    return [
+      'SCAN_FILES',
+      'VIEW_SCAN_RESULTS',
+      'VIEW_SCAN_HISTORY',
+      'VIEW_REPORTS',
+      'CHECK_ENDPOINT_COMPLIANCE',
+      'MANAGE_ORGANIZATION',
+      'MANAGE_USERS',
+      'MANAGE_DEVICES',
+      'VIEW_ORG_TELEMETRY',
+      'CONFIGURE_COMPLIANCE'
+    ];
+  }
+  // USER / VIEWER / OPERATOR / AUDITOR
+  const baseUserPermissions = [
+    'SCAN_FILES',
+    'VIEW_SCAN_RESULTS',
+    'VIEW_SCAN_HISTORY',
+    'VIEW_REPORTS',
+    'CHECK_ENDPOINT_COMPLIANCE'
+  ];
+  if (role === 'AUDITOR') {
+    baseUserPermissions.push('AUDIT_OVERRIDE');
+  }
+  return baseUserPermissions;
+}
 
 export interface AuthenticatedUser {
   userId: string;
@@ -306,12 +367,25 @@ export function authenticateRequest(req: Request, res: Response, next: NextFunct
   }
 }
 
-export function requireRole(allowedRoles: UserRole[]) {
+export function requireRole(allowedRoles: (UserRole | string)[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    if (!allowedRoles.includes(req.user.role)) {
+    const userRole = req.user.role;
+    
+    // SYS_ADMIN / SUPER_ADMIN has global authorization across all capabilities
+    if (userRole === 'SYS_ADMIN' || userRole === 'SUPER_ADMIN') {
+      return next();
+    }
+
+    // Check direct role match or super admin alias match
+    const isAuthorized = allowedRoles.some(allowed => {
+      if (allowed === userRole) return true;
+      return false;
+    });
+
+    if (!isAuthorized) {
       logSecurityEvent('AUTHORIZATION_FAILURE', 'FAILURE', req.user.orgId, req.user.userId, req.user.deviceId, { required: allowedRoles, actual: req.user.role });
       return res.status(403).json({ error: `Forbidden: Role '${req.user.role}' is not authorized for this action` });
     }

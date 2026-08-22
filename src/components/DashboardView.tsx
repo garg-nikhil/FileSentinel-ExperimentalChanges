@@ -1,7 +1,7 @@
 import React from 'react';
 import { DashboardStats, FileItem } from '../types';
 import { SeverityBadge, ClassificationBadge } from './Badges';
-import { Shield, FileCheck, ShieldAlert, FolderSearch, ArrowUpRight, Radio } from 'lucide-react';
+import { Shield, FileCheck, ShieldAlert, FolderSearch, ArrowUpRight, Radio, CheckCircle2, XCircle, AlertTriangle, FileText } from 'lucide-react';
 
 interface DashboardProps {
   stats: DashboardStats | null;
@@ -24,7 +24,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
     );
   }
 
-  const { totalScans, totalFilesScanned, riskBreakdown, quarantinedCount, highestRiskFiles, recentFindings } = stats;
+  const { totalScans, totalFilesScanned, riskBreakdown, fileSummary, quarantinedCount, highestRiskFiles, recentFindings } = stats;
 
   return (
     <div className="p-8 space-y-8 max-w-7xl mx-auto">
@@ -48,6 +48,59 @@ export const DashboardView: React.FC<DashboardProps> = ({
           Start New Scan
         </button>
       </div>
+
+      {/* Primary File Outcome Summary */}
+      {fileSummary && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div
+            onClick={() => onNavigate('files')}
+            className="bg-slate-900/80 border border-slate-800 p-4 rounded-xl cursor-pointer hover:border-slate-700 transition-all flex flex-col justify-between"
+          >
+            <div className="text-xs text-slate-400 font-medium flex items-center justify-between">
+              <span>Total Files Scanned</span>
+              <FileText className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="text-2xl font-bold text-slate-100 mt-2 font-mono">{fileSummary.total_scanned}</div>
+            <div className="text-[11px] text-slate-500 mt-1">{totalScans} scan sessions</div>
+          </div>
+
+          <div
+            onClick={() => onNavigate('files')}
+            className="bg-slate-900/80 border border-emerald-500/20 p-4 rounded-xl cursor-pointer hover:border-emerald-500/50 transition-all flex flex-col justify-between"
+          >
+            <div className="text-xs text-emerald-400 font-medium flex items-center justify-between">
+              <span>✓ Files Passed</span>
+              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+            </div>
+            <div className="text-2xl font-bold text-emerald-400 mt-2 font-mono">{fileSummary.passed}</div>
+            <div className="text-[11px] text-emerald-500/80 mt-1 font-semibold">{fileSummary.passed_pct}% clean files</div>
+          </div>
+
+          <div
+            onClick={() => onNavigate('files')}
+            className="bg-slate-900/80 border border-rose-500/20 p-4 rounded-xl cursor-pointer hover:border-rose-500/50 transition-all flex flex-col justify-between"
+          >
+            <div className="text-xs text-rose-400 font-medium flex items-center justify-between">
+              <span>✕ Files Failed</span>
+              <XCircle className="w-4 h-4 text-rose-500" />
+            </div>
+            <div className="text-2xl font-bold text-rose-400 mt-2 font-mono">{fileSummary.failed}</div>
+            <div className="text-[11px] text-rose-500/80 mt-1 font-semibold">{fileSummary.failed_pct}% violations</div>
+          </div>
+
+          <div
+            onClick={() => onNavigate('files')}
+            className="bg-slate-900/80 border border-amber-500/20 p-4 rounded-xl cursor-pointer hover:border-amber-500/50 transition-all flex flex-col justify-between"
+          >
+            <div className="text-xs text-amber-400 font-medium flex items-center justify-between">
+              <span>⚠ Files For Review</span>
+              <AlertTriangle className="w-4 h-4 text-amber-500" />
+            </div>
+            <div className="text-2xl font-bold text-amber-400 mt-2 font-mono">{fileSummary.review}</div>
+            <div className="text-[11px] text-amber-500/80 mt-1 font-semibold">{fileSummary.review_pct}% ambiguous detections</div>
+          </div>
+        </div>
+      )}
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">

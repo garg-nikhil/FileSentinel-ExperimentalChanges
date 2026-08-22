@@ -68,6 +68,7 @@ export const EndpointComplianceView: React.FC = () => {
   };
 
   const handleRunAssessment = async () => {
+    setAssessment(null);
     setAssessing(true);
     setError(null);
     try {

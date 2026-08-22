@@ -608,3 +608,69 @@ export const INITIAL_AUDIT_CHECKLIST: AuditParameter[] = [
     enabled: true
   }
 ];
+
+// --- DETECTION-BASED PARAMETERS (Sensitive Data Detection) ---
+// These parameters evaluate scanner findings (PII / secrets / financial / security)
+// rather than compliance evidence presence. They use the detection engine pipeline.
+export const DETECTION_CHECKLIST_PARAMETERS: AuditParameter[] = [
+  {
+    id: 'DET-001',
+    category: 'ZERO_TOLERANCE',
+    category_name: 'Regulatory and Operational Integrity',
+    category_weight: 100,
+    parameter: 'PII must not be present in business documents',
+    domain: 'UNASSIGNED',
+    fatal: true,
+    severity: 'CRITICAL',
+    required_evidence: [],
+    keywords: ['PII', 'personal data', 'email', 'phone', 'aadhaar', 'PAN', 'bank account', 'credit card'],
+    logic: 'SINGLE' as const,
+    evaluation_rules: ['Scan all files for PII patterns (email, phone, Aadhaar, PAN, bank account, credit card). FAIL if high-confidence PII detected, REVIEW if uncertain.'],
+    enabled: true
+  },
+  {
+    id: 'DET-002',
+    category: 'ZERO_TOLERANCE',
+    category_name: 'Regulatory and Operational Integrity',
+    category_weight: 100,
+    parameter: 'Secrets and credentials must not be present in documents',
+    domain: 'UNASSIGNED',
+    fatal: true,
+    severity: 'CRITICAL',
+    required_evidence: [],
+    keywords: ['password', 'secret', 'API key', 'JWT', 'private key', 'credential'],
+    logic: 'SINGLE' as const,
+    evaluation_rules: ['Scan all files for hardcoded secrets (passwords, API keys, JWTs, private keys). FAIL if high-confidence secret detected, REVIEW if uncertain.'],
+    enabled: true
+  },
+  {
+    id: 'DET-003',
+    category: 'GOVERNANCE_COMPLIANCE_INFOSEC',
+    category_name: 'Governance, Compliance & INFOSEC',
+    category_weight: 60,
+    parameter: 'Financial data must not be exposed in uncontrolled documents',
+    domain: 'UNASSIGNED',
+    fatal: false,
+    severity: 'HIGH',
+    required_evidence: [],
+    keywords: ['salary', 'payroll', 'transaction', 'invoice', 'compensation', 'financial'],
+    logic: 'SINGLE' as const,
+    evaluation_rules: ['Scan all files for financial data patterns (salary, payroll, transactions). FAIL if high-confidence financial data detected, REVIEW if uncertain.'],
+    enabled: true
+  },
+  {
+    id: 'DET-004',
+    category: 'GOVERNANCE_COMPLIANCE_INFOSEC',
+    category_name: 'Governance, Compliance & INFOSEC',
+    category_weight: 60,
+    parameter: 'Security-sensitive information must not be exposed',
+    domain: 'UNASSIGNED',
+    fatal: false,
+    severity: 'HIGH',
+    required_evidence: [],
+    keywords: ['internal IP', 'database connection', 'SSH', 'infrastructure', 'network topology'],
+    logic: 'SINGLE' as const,
+    evaluation_rules: ['Scan all files for security-sensitive patterns (internal IPs, DB connection strings, SSH configs). FAIL if high-confidence security data detected, REVIEW if uncertain.'],
+    enabled: true
+  }
+];

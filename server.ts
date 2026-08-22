@@ -50,7 +50,24 @@ async function startServer() {
   // Mount Vite middleware in development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        watch: {
+          ignored: [
+            '**/*.db',
+            '**/*.db-wal',
+            '**/*.db-shm',
+            '**/*.sqlite*',
+            '**/filesentinel.db*',
+            '**/data/**',
+            '**/tmp/**',
+            '**/logs/**',
+            '**/*.log',
+            '**/backend/**',
+            '**/tests/**'
+          ]
+        }
+      },
       appType: 'spa'
     });
     app.use(vite.middlewares);

@@ -274,6 +274,20 @@ export interface AuditParameterResult {
   warnings: string[];
   ai_recommendation?: AIRecommendation;
   override?: AuditOverride;
+  /** Detection-based evaluation results (PII/secrets/sensitive data detection) */
+  detection_results?: {
+    status: 'PASS' | 'FAIL' | 'REVIEW';
+    affected_files: {
+      filename: string;
+      detection_type: string;
+      confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+      reason: string;
+      rule_id: string;
+      severity: string;
+      evidence_summary?: string;
+    }[];
+    explanation: string;
+  };
 }
 
 export interface EntityEvidenceReference {
@@ -415,10 +429,44 @@ export interface AuditSession {
   entity_conflicts?: EntityConflict[];
   entity_findings?: AuditEntityFinding[];
   entity_resolution?: AuditSessionEntityResolutionResult;
+  file_summary?: FileOutcomeSummary;
+  file_outcomes?: FileOutcomeDetail[];
   // CamelCase aliases
   entityConflicts?: EntityConflict[];
   entityFindings?: AuditEntityFinding[];
   entityResolution?: AuditSessionEntityResolutionResult;
+  fileSummary?: FileOutcomeSummary;
+  fileOutcomes?: FileOutcomeDetail[];
+}
+
+export type FileOutcomeStatus = 'PASS' | 'FAIL' | 'REVIEW' | 'ERROR' | 'SKIPPED' | 'PROCESSING';
+
+export interface FileOutcomeDetail {
+  file_id: string;
+  filename: string;
+  path: string;
+  outcome: FileOutcomeStatus;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  confidence_score: number;
+  reason: string;
+  violating_rules: string[];
+  review_rules: string[];
+  findings_count: number;
+  scan_status: string;
+  findings?: any[];
+}
+
+export interface FileOutcomeSummary {
+  total_scanned: number;
+  passed: number;
+  failed: number;
+  review: number;
+  skipped: number;
+  errors: number;
+  total_discovered: number;
+  passed_pct: number;
+  failed_pct: number;
+  review_pct: number;
 }
 
 export interface EvidenceGap {
